@@ -540,6 +540,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+
+
 def main():
     """Запуск бота"""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -605,13 +607,22 @@ def main():
         logger.info(f"Запуск бота с webhook на порту {port}...")
         logger.info(f"Webhook URL: {webhook_url}/{token}")
         
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=token,
-            webhook_url=f"{webhook_url}/{token}",
-            allowed_updates=Update.ALL_TYPES
-        )
+        # Запускаем webhook (это блокирующий вызов, который держит процесс активным)
+        try:
+            logger.info("Инициализация webhook...")
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=token,
+                webhook_url=f"{webhook_url}/{token}",
+                allowed_updates=Update.ALL_TYPES
+            )
+            logger.info("Webhook запущен успешно")
+        except KeyboardInterrupt:
+            logger.info("Получен сигнал остановки (KeyboardInterrupt)")
+        except Exception as e:
+            logger.error(f"Ошибка при запуске webhook: {e}", exc_info=True)
+            raise
     else:
         # Используем polling для локальной разработки
         logger.info("Запуск бота в режиме polling...")
