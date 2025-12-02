@@ -17,6 +17,11 @@ class Bitrix24Client:
             domain: Домен Битрикс24 (например, your-domain.bitrix24.ru)
             webhook_token: Токен вебхука для доступа к API
         """
+        if domain is None:
+            raise ValueError("BITRIX24_DOMAIN не установлен в переменных окружения")
+        if webhook_token is None:
+            raise ValueError("BITRIX24_WEBHOOK_TOKEN не установлен в переменных окружения")
+        
         self.domain = domain.rstrip('/')
         self.webhook_token = webhook_token
         self.base_url = f"https://{self.domain}/rest/{webhook_token}"
