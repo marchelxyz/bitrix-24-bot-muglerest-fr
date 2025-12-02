@@ -125,6 +125,49 @@ python bot.py
 /cancel
 ```
 
+## Деплой на Railway
+
+Проект готов к деплою на Railway без использования командной строки и .env файлов.
+
+### Шаги для деплоя:
+
+1. **Подключите репозиторий к Railway:**
+   - Зайдите на [Railway](https://railway.app)
+   - Создайте новый проект
+   - Подключите ваш GitHub репозиторий
+
+2. **Настройте переменные окружения в Railway:**
+   - В интерфейсе Railway перейдите в раздел **Variables**
+   - Добавьте следующие переменные:
+     - `TELEGRAM_BOT_TOKEN` - токен вашего Telegram бота
+     - `BITRIX24_DOMAIN` - домен Битрикс24 (например, `your-domain.bitrix24.ru`)
+     - `BITRIX24_WEBHOOK_TOKEN` - токен вебхука Битрикс24
+     - `BITRIX24_USER_ID` - ваш ID пользователя в Битрикс24 (опционально, для дефолтного создателя)
+     - `WEBHOOK_URL` - URL вашего приложения на Railway (Railway автоматически предоставляет переменную `RAILWAY_PUBLIC_DOMAIN`, но можно использовать полный URL)
+
+3. **Настройте webhook для Telegram:**
+   - После деплоя Railway предоставит публичный URL вашего приложения
+   - Добавьте переменную `WEBHOOK_URL` в Railway со значением `https://${{RAILWAY_PUBLIC_DOMAIN}}`
+     (Railway автоматически подставит ваш домен)
+   - Или установите webhook вручную через API Telegram:
+     ```
+     https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<YOUR_RAILWAY_DOMAIN>/<YOUR_BOT_TOKEN>
+     ```
+   - Бот автоматически настроит webhook при запуске, если установлены `PORT` и `WEBHOOK_URL`
+
+4. **Railway автоматически:**
+   - Определит Python из `runtime.txt`
+   - Установит зависимости из `requirements.txt`
+   - Запустит приложение через `Procfile`
+
+### Примечания:
+
+- Railway автоматически устанавливает переменную `PORT` - бот использует её для webhook
+- Если `PORT` установлен, но `WEBHOOK_URL` не найден, бот попытается использовать `RAILWAY_PUBLIC_DOMAIN`
+- Если `PORT` не установлен, бот будет работать в режиме polling (для локальной разработки)
+- Все переменные окружения настраиваются через интерфейс Railway, файл `.env` не требуется
+- После первого деплоя проверьте логи Railway, чтобы убедиться, что webhook установлен корректно
+
 ## Структура проекта
 
 ```
@@ -132,7 +175,10 @@ python bot.py
 ├── bot.py                 # Основной файл Telegram бота
 ├── bitrix24_client.py     # Клиент для работы с API Битрикс24
 ├── requirements.txt       # Зависимости Python
-├── .env.example          # Пример файла конфигурации
+├── Procfile              # Конфигурация для Railway
+├── runtime.txt          # Версия Python для Railway
+├── set_webhook.py        # Скрипт для установки webhook (опционально)
+├── .env.example          # Пример файла конфигурации (для локальной разработки)
 ├── .gitignore            # Игнорируемые файлы
 └── README.md             # Документация
 ```

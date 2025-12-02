@@ -18,8 +18,10 @@ from telegram.ext import (
 )
 from bitrix24_client import Bitrix24Client
 
-# Загрузка переменных окружения
-load_dotenv()
+# Загрузка переменных окружения (только если файл .env существует)
+# В Railway переменные окружения настраиваются в интерфейсе
+if os.path.exists('.env'):
+    load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(
@@ -583,9 +585,37 @@ def main():
     application.add_handler(CommandHandler("link_username", link_username))
     application.add_handler(task_creation_handler)
     
-    # Запускаем бота
-    logger.info("Бот запущен...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Проверяем, используется ли webhook (для Railway/продакшена)
+    port = int(os.getenv("PORT", 0))
+    webhook_url = os.getenv("WEBHOOK_URL")
+    
+    # Если порт установлен (Railway автоматически устанавливает PORT), используем webhook
+    if port > 0:
+        # Используем webhook для Railway
+        if not webhook_url:
+            # Пытаемся получить URL из переменных Railway
+            railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+            if railway_domain:
+                webhook_url = f"https://{railway_domain}"
+            else:
+                logger.warning("PORT установлен, но WEBHOOK_URL не найден. Используется polling.")
+                application.run_polling(allowed_updates=Update.ALL_TYPES)
+                return
+        
+        logger.info(f"Запуск бота с webhook на порту {port}...")
+        logger.info(f"Webhook URL: {webhook_url}/{token}")
+        
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=token,
+            webhook_url=f"{webhook_url}/{token}",
+            allowed_updates=Update.ALL_TYPES
+        )
+    else:
+        # Используем polling для локальной разработки
+        logger.info("Запуск бота в режиме polling...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
