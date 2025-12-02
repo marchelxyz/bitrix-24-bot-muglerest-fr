@@ -16,7 +16,6 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
-from telegram.constants import ParseMode
 from bitrix24_client import Bitrix24Client
 
 # Загрузка переменных окружения
@@ -495,6 +494,9 @@ async def create_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     name = f"{user_info.get('NAME', '')} {user_info.get('LAST_NAME', '')}".strip()
                     responsibles_info.append(name)
             
+            # Получаем ссылку на задачу
+            task_url = bitrix_client.get_task_url(task_id, creator_id)
+            
             response_text = (
                 f"✅ Задача создана!\n\n"
                 f"📋 Задача: {task_title}\n"
@@ -507,8 +509,10 @@ async def create_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if description:
                 response_text += f"📝 Описание: {description[:100]}...\n" if len(description) > 100 else f"📝 Описание: {description}\n"
             
-            response_text += f"🆔 ID задачи: {task_id}"
+            response_text += f"🆔 ID задачи: {task_id}\n\n"
+            response_text += f"🔗 Ссылка на задачу: {task_url}"
             
+            # Отправляем сообщение в чат (в тот же чат, где была создана задача)
             await update.message.reply_text(response_text)
         else:
             error_msg = result.get('error_description', 'Неизвестная ошибка')

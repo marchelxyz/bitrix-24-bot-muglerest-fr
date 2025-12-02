@@ -165,3 +165,23 @@ class Bitrix24Client:
         # или использовать внешнюю таблицу соответствий
         # Пока возвращаем None - нужно будет настроить маппинг
         return None
+    
+    def get_task_url(self, task_id: int, user_id: int = None) -> str:
+        """
+        Получение ссылки на задачу в Битрикс24
+        
+        Args:
+            task_id: ID задачи
+            user_id: ID пользователя (опционально, для персональной ссылки)
+            
+        Returns:
+            URL задачи в Битрикс24
+        """
+        # В Битрикс24 ссылка на задачу может быть разной в зависимости от настроек
+        # Используем универсальный формат через задачи
+        if user_id:
+            # Персональная ссылка пользователя (более надежная)
+            return f"https://{self.domain}/company/personal/user/{user_id}/tasks/task/view/{task_id}/"
+        else:
+            # Альтернативный формат через общий раздел задач
+            return f"https://{self.domain}/company/personal/user/0/tasks/task/view/{task_id}/"
