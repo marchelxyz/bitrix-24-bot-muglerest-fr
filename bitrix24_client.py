@@ -326,7 +326,7 @@ class Bitrix24Client:
                 if error == "WRONG_AUTH" or error == "NO_AUTH_FOUND" or "ACCESS_DENIED" in str(error).upper():
                     logger.error("   ⚠️ Проблема с правами доступа вебхука!")
                     logger.error("   Решение: Создайте поле UF_TELEGRAM_ID вручную через интерфейс Bitrix24:")
-                    logger.error("   Прямой URL: https://YOUR-DOMAIN.bitrix24.ru/company/personal/user/index.php?ID=0&lang=ru&USER_FIELD_ID=0")
+                    logger.error("   Прямой URL: https://YOUR-DOMAIN.bitrix24.ru/bitrix/admin/userfield_edit.php?ENTITY_ID=USER&lang=ru")
                     logger.error("   Или через меню: Настройки → Настройки компании → Пользовательские поля")
                     logger.error("   Код поля: UF_TELEGRAM_ID, Тип: Строка")
                 
@@ -341,7 +341,7 @@ class Bitrix24Client:
             if "401" in error_str or "ACCESS_DENIED" in error_str or "WRONG_AUTH" in error_str:
                 logger.error("   ⚠️ Вебхук не имеет прав на создание пользовательских полей!")
                 logger.error("   Решение: Создайте поле UF_TELEGRAM_ID вручную через интерфейс Bitrix24:")
-                logger.error("   Прямой URL: https://YOUR-DOMAIN.bitrix24.ru/company/personal/user/index.php?ID=0&lang=ru&USER_FIELD_ID=0")
+                logger.error("   Прямой URL: https://YOUR-DOMAIN.bitrix24.ru/bitrix/admin/userfield_edit.php?ENTITY_ID=USER&lang=ru")
                 logger.error("   Или через меню: Настройки → Настройки компании → Пользовательские поля")
                 logger.error("   Код поля: UF_TELEGRAM_ID, Тип: Строка")
             

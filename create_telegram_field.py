@@ -137,7 +137,7 @@ def main():
         print("\n⚠️ Для создания поля нужен OAuth токен администратора (не вебхук!)")
         print("   Получить OAuth токен можно через: https://www.bitrix24.ru/apps/local/dev.php")
         print("   Или создайте поле вручную через интерфейс Bitrix24:")
-        print(f"   https://{domain}/company/personal/user/index.php?ID=0&lang=ru&USER_FIELD_ID=0")
+        print(f"   https://{domain}/bitrix/admin/userfield_edit.php?ENTITY_ID=USER&lang=ru")
         oauth_token = input("\nВведите OAuth токен администратора (или нажмите Enter для выхода): ").strip()
         
         if not oauth_token:
@@ -163,7 +163,7 @@ def main():
     else:
         print("\n💡 Альтернативный способ:")
         print(f"   Создайте поле вручную через интерфейс Bitrix24:")
-        print(f"   https://{domain}/company/personal/user/index.php?ID=0&lang=ru&USER_FIELD_ID=0")
+        print(f"   https://{domain}/bitrix/admin/userfield_edit.php?ENTITY_ID=USER&lang=ru")
         print("   Код поля: UF_TELEGRAM_ID, Тип: Строка")
 
 
