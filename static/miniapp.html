@@ -410,19 +410,45 @@
         
         // Загружаем данные сессии
         async function loadSession() {
-            // Проверяем наличие токена
-            if (!token) {
-                showError('Токен сессии не найден. Пожалуйста, используйте кнопку из сообщения бота.');
-                document.getElementById('loading').classList.remove('show');
-                return;
-            }
-            
             // Показываем индикатор загрузки
             document.getElementById('loading').classList.add('show');
             try {
-                const response = await fetch(getApiUrl(`/api/miniapp/session?token=${token}`));
+                let response;
+                
+                // Если токен есть, используем его
+                if (token) {
+                    const apiUrl = getApiUrl(`/api/miniapp/session?token=${token}`);
+                    response = await fetch(apiUrl);
+                } else {
+                    // Если токена нет, передаем initData из Telegram WebApp API через POST
+                    // Это работает когда Mini App открывается через кнопку меню
+                    const initData = tg.initData;
+                    if (!initData) {
+                        throw new Error('Данные авторизации не найдены. Пожалуйста, используйте кнопку из сообщения бота или команду /create.');
+                    }
+                    
+                    // Передаем initData через POST запрос
+                    const apiUrl = getApiUrl('/api/miniapp/session');
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ initData: initData })
+                    });
+                }
+                
                 if (!response.ok) {
-                    throw new Error('Не удалось загрузить данные сессии');
+                    const errorData = await response.json().catch(() => ({}));
+                    
+                    // Если пользователь не найден в Bitrix24, показываем понятное сообщение
+                    if (errorData.error_code === 'USER_NOT_LINKED') {
+                        showError('Ваш Telegram аккаунт не связан с Битрикс24.\n\nИспользуйте команду:\n/link bitrix_user_id\n\nЧтобы узнать свой ID в Битрикс24, зайдите в профиль и посмотрите в URL.');
+                        document.getElementById('loading').classList.remove('show');
+                        return;
+                    }
+                    
+                    throw new Error(errorData.error || 'Не удалось загрузить данные сессии');
                 }
                 const data = await response.json();
                 console.log('Данные сессии загружены:', data);
