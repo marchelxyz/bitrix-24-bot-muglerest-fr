@@ -47,6 +47,31 @@ bitrix_client = Bitrix24Client(
     webhook_token=os.getenv("BITRIX24_WEBHOOK_TOKEN")
 )
 
+# Создаем поле UF_TELEGRAM_ID в Bitrix24 при старте (если его еще нет)
+# Это поле используется для сохранения Telegram ID пользователей
+try:
+    field_created = bitrix_client.ensure_telegram_id_field()
+    if field_created:
+        logger.info("✅ Поле UF_TELEGRAM_ID проверено/создано в Bitrix24")
+    else:
+        logger.warning("⚠️ Не удалось создать поле UF_TELEGRAM_ID в Bitrix24. Проверьте права вебхука.")
+except Exception as e:
+    logger.error(f"❌ Ошибка при проверке поля UF_TELEGRAM_ID: {e}", exc_info=True)
+    logger.warning("Бот будет работать, но сохранение Telegram ID в Bitrix24 может не работать")
+
+# Загружаем существующие связи из Bitrix24 при старте
+# Это позволяет восстановить маппинг после перезапуска бота
+try:
+    loaded_mappings = bitrix_client.load_all_telegram_mappings()
+    if loaded_mappings:
+        TELEGRAM_TO_BITRIX_MAPPING.update(loaded_mappings)
+        logger.info(f"✅ Восстановлено {len(loaded_mappings)} связей из Bitrix24")
+    else:
+        logger.info("ℹ️ В Bitrix24 пока нет сохраненных связей. Используйте команду /link для связывания.")
+except Exception as e:
+    logger.error(f"Ошибка при загрузке связей из Bitrix24: {e}", exc_info=True)
+    logger.warning("Бот будет работать, но связи нужно будет устанавливать заново")
+
 # Состояния диалога
 WAITING_FOR_RESPONSIBLES, WAITING_FOR_DEADLINE, WAITING_FOR_DESCRIPTION, WAITING_FOR_FILES = range(4)
 
