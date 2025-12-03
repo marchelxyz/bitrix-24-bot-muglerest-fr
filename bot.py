@@ -692,6 +692,8 @@ async def handle_reply_with_mention(update: Update, context: ContextTypes.DEFAUL
         "responsible_name": responsible_name,
         "creator_telegram_id": creator_telegram_id,
         "responsible_telegram_id": responsible_telegram_id,
+        "chat_id": message.chat_id,  # Сохраняем chat_id для отправки ответа
+        "message_id": message.message_id,  # Сохраняем message_id для ответа
         "timestamp": datetime.now().isoformat()
     }
     
@@ -1017,12 +1019,53 @@ def main():
                         if result.get("result") and result["result"].get("task"):
                             task_id = result["result"]["task"]["id"]
                             
+                            # Получаем ссылку на задачу
+                            task_url = bitrix_client.get_task_url(task_id, creator_id)
+                            
+                            # Получаем информацию о задаче для сообщения
+                            responsible_info = bitrix_client.get_user_by_id(responsible_id)
+                            responsible_name = ""
+                            if responsible_info:
+                                responsible_name = f"{responsible_info.get('NAME', '')} {responsible_info.get('LAST_NAME', '')}".strip()
+                            
+                            # Формируем текст сообщения
+                            response_text = (
+                                f"✅ Задача создана!\n\n"
+                                f"📋 Задача: {title}\n"
+                            )
+                            
+                            if responsible_name:
+                                response_text += f"👤 Ответственный: {responsible_name}\n"
+                            
+                            if deadline:
+                                response_text += f"📅 Срок: {deadline}\n"
+                            
+                            if description:
+                                response_text += f"📝 Описание: {description[:100]}...\n" if len(description) > 100 else f"📝 Описание: {description}\n"
+                            
+                            response_text += f"🆔 ID задачи: {task_id}\n\n"
+                            response_text += f"🔗 Ссылка на задачу: {task_url}"
+                            
+                            # Отправляем сообщение в чат с ссылкой на задачу
+                            chat_id = session_data.get('chat_id')
+                            message_id = session_data.get('message_id')
+                            
+                            if chat_id:
+                                try:
+                                    # Отправляем сообщение в чат
+                                    await application.bot.send_message(
+                                        chat_id=chat_id,
+                                        text=response_text,
+                                        reply_to_message_id=message_id
+                                    )
+                                    logger.info(f"Сообщение с ссылкой на задачу отправлено в чат {chat_id}")
+                                except Exception as send_error:
+                                    logger.error(f"Ошибка при отправке сообщения в чат: {send_error}", exc_info=True)
+                                    # Продолжаем работу, даже если не удалось отправить сообщение
+                            
                             # Удаляем сессию после успешного создания
                             if session_key in application.bot_data:
                                 del application.bot_data[session_key]
-                            
-                            # Получаем ссылку на задачу
-                            task_url = bitrix_client.get_task_url(task_id, creator_id)
                             
                             return web.json_response({
                                 'success': True,
