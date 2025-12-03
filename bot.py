@@ -193,8 +193,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Начать работу\n"
         "/help - Показать справку\n"
         "/link bitrix_id - Связать ваш Telegram аккаунт с ID пользователя Битрикс24\n"
+        "  (Telegram ID будет сохранен в профиле пользователя в Bitrix24)\n"
         "/link_username @username bitrix_id - Связать Telegram username с пользователем Битрикс24\n"
-        "/cancel - Отменить создание задачи"
+        "/cancel - Отменить создание задачи\n\n"
+        "💡 После команды /link бот автоматически определяет ваш аккаунт "
+        "по Telegram ID из Bitrix24!"
     )
 
 
@@ -204,7 +207,8 @@ async def link_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Использование: /link bitrix_user_id\n\n"
             "Пример: /link 123\n\n"
-            "Эта команда свяжет ваш Telegram аккаунт с пользователем Битрикс24."
+            "Эта команда свяжет ваш Telegram аккаунт с пользователем Битрикс24.\n"
+            "Telegram ID будет сохранен в профиле пользователя в Bitrix24."
         )
         return
     
@@ -221,14 +225,36 @@ async def link_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = bitrix_user_id
-        await update.message.reply_text(
-            f"✅ Связь установлена:\n"
-            f"Ваш Telegram аккаунт → {user_info.get('NAME', '')} {user_info.get('LAST_NAME', '')} "
-            f"(ID: {bitrix_user_id})"
-        )
+        # Сохраняем Telegram ID в Bitrix24
+        success = bitrix_client.update_user_telegram_id(bitrix_user_id, telegram_user_id)
+        
+        if success:
+            # Также сохраняем в локальное хранилище для быстрого доступа
+            TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = bitrix_user_id
+            
+            await update.message.reply_text(
+                f"✅ Связь установлена и сохранена в Bitrix24:\n"
+                f"Ваш Telegram аккаунт (ID: {telegram_user_id}) → "
+                f"{user_info.get('NAME', '')} {user_info.get('LAST_NAME', '')} "
+                f"(ID: {bitrix_user_id})\n\n"
+                f"Теперь бот будет автоматически определять ваш аккаунт!"
+            )
+        else:
+            # Если не удалось сохранить в Bitrix24, сохраняем только локально
+            TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = bitrix_user_id
+            await update.message.reply_text(
+                f"⚠️ Связь установлена локально:\n"
+                f"Ваш Telegram аккаунт → {user_info.get('NAME', '')} {user_info.get('LAST_NAME', '')} "
+                f"(ID: {bitrix_user_id})\n\n"
+                f"Не удалось сохранить в Bitrix24. Проверьте права доступа вебхука."
+            )
     except ValueError:
         await update.message.reply_text("❌ ID пользователя должен быть числом")
+    except Exception as e:
+        logger.error(f"Ошибка при связывании пользователя: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Произошла ошибка при связывании аккаунта. Попробуйте позже."
+        )
 
 
 async def link_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -284,14 +310,27 @@ async def start_task_creation(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Получаем ID создателя задачи
     telegram_user_id = update.effective_user.id
+    
+    # Сначала проверяем локальное хранилище
     creator_id = TELEGRAM_TO_BITRIX_MAPPING.get(telegram_user_id)
+    
+    # Если не найдено локально, ищем в Bitrix24
+    if not creator_id:
+        user_info = bitrix_client.get_user_by_telegram_id(telegram_user_id)
+        if user_info:
+            creator_id = int(user_info.get("ID"))
+            # Сохраняем в локальное хранилище для быстрого доступа
+            TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = creator_id
+            logger.info(f"Пользователь найден в Bitrix24 по Telegram ID {telegram_user_id}: {creator_id}")
     
     if not creator_id:
         await update.message.reply_text(
             "❌ Ваш Telegram аккаунт не связан с Битрикс24.\n\n"
             "Используйте команду:\n"
             "/link bitrix_user_id\n\n"
-            "Чтобы узнать свой ID в Битрикс24, зайдите в профиль и посмотрите в URL."
+            "Чтобы узнать свой ID в Битрикс24, зайдите в профиль и посмотрите в URL.\n\n"
+            "После связывания ваш Telegram ID будет сохранен в Bitrix24, "
+            "и бот будет автоматически определять ваш аккаунт."
         )
         return ConversationHandler.END
     
