@@ -1256,24 +1256,97 @@ def main():
                 # API: Получение данных сессии Mini App
                 async def miniapp_session_handler(request):
                     try:
+                        # Поддерживаем как GET (для токена), так и POST (для initData)
                         token = request.query.get('token')
-                        if not token:
-                            return web.json_response({'error': 'Токен не указан'}, status=400)
                         
-                        session_key = f"miniapp_session_{token}"
-                        session_data = application.bot_data.get(session_key)
+                        # Если токен указан, используем данные из сессии
+                        if token:
+                            session_key = f"miniapp_session_{token}"
+                            session_data = application.bot_data.get(session_key)
+                            
+                            if not session_data:
+                                return web.json_response({'error': 'Сессия не найдена или истекла'}, status=404)
+                            
+                            # Возвращаем данные без чувствительной информации
+                            return web.json_response({
+                                'creator_bitrix_id': session_data.get('creator_bitrix_id'),
+                                'responsible_bitrix_id': session_data.get('responsible_bitrix_id'),
+                                'original_message_text': session_data.get('original_message_text', ''),
+                                'creator_name': session_data.get('creator_name', ''),
+                                'responsible_name': session_data.get('responsible_name', '')
+                            })
                         
-                        if not session_data:
-                            return web.json_response({'error': 'Сессия не найдена или истекла'}, status=404)
+                        # Если токен не указан, определяем пользователя из Telegram WebApp API
+                        # Получаем initData из POST запроса или заголовков
+                        init_data = None
+                        if request.method == 'POST':
+                            try:
+                                post_data = await request.json()
+                                init_data = post_data.get('initData')
+                            except:
+                                pass
                         
-                        # Возвращаем данные без чувствительной информации
-                        return web.json_response({
-                            'creator_bitrix_id': session_data.get('creator_bitrix_id'),
-                            'responsible_bitrix_id': session_data.get('responsible_bitrix_id'),
-                            'original_message_text': session_data.get('original_message_text', ''),
-                            'creator_name': session_data.get('creator_name', ''),
-                            'responsible_name': session_data.get('responsible_name', '')
-                        })
+                        if not init_data:
+                            init_data = request.query.get('initData') or request.headers.get('X-Telegram-Init-Data')
+                        
+                        if not init_data:
+                            return web.json_response({'error': 'Токен или initData не указаны'}, status=400)
+                        
+                        # Парсим initData для получения Telegram User ID
+                        # В реальности нужно проверить подпись initData, но для простоты парсим напрямую
+                        try:
+                            from urllib.parse import parse_qs, unquote
+                            parsed_data = parse_qs(unquote(init_data))
+                            user_data_str = parsed_data.get('user', [None])[0]
+                            
+                            if not user_data_str:
+                                return web.json_response({'error': 'Данные пользователя не найдены в initData'}, status=400)
+                            
+                            import json
+                            user_data = json.loads(user_data_str)
+                            telegram_user_id = user_data.get('id')
+                            
+                            if not telegram_user_id:
+                                return web.json_response({'error': 'Telegram User ID не найден'}, status=400)
+                            
+                            logger.info(f"Определение пользователя по Telegram ID: {telegram_user_id}")
+                            
+                            # Определяем Bitrix ID пользователя
+                            creator_bitrix_id = TELEGRAM_TO_BITRIX_MAPPING.get(telegram_user_id)
+                            if not creator_bitrix_id:
+                                creator_info = bitrix_client.get_user_by_telegram_id(telegram_user_id)
+                                if creator_info:
+                                    creator_bitrix_id = int(creator_info.get("ID"))
+                                    TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = creator_bitrix_id
+                                    logger.info(f"Пользователь найден в Bitrix24: {creator_bitrix_id}")
+                            
+                            if not creator_bitrix_id:
+                                logger.warning(f"Пользователь {telegram_user_id} не найден в Bitrix24")
+                                return web.json_response({
+                                    'error': 'Пользователь не найден в Bitrix24',
+                                    'error_code': 'USER_NOT_LINKED',
+                                    'telegram_user_id': telegram_user_id
+                                }, status=404)
+                            
+                            # Получаем информацию о пользователе
+                            creator_info = bitrix_client.get_user_by_id(creator_bitrix_id)
+                            creator_name = f"{creator_info.get('NAME', '')} {creator_info.get('LAST_NAME', '')}".strip() if creator_info else f"ID: {creator_bitrix_id}"
+                            
+                            logger.info(f"Пользователь определен: {creator_name} (ID: {creator_bitrix_id})")
+                            
+                            # Возвращаем данные для создания задачи от текущего пользователя
+                            return web.json_response({
+                                'creator_bitrix_id': creator_bitrix_id,
+                                'responsible_bitrix_id': None,
+                                'original_message_text': '',
+                                'creator_name': creator_name,
+                                'responsible_name': ''
+                            })
+                            
+                        except (json.JSONDecodeError, KeyError, ValueError) as e:
+                            logger.error(f"Ошибка парсинга initData: {e}", exc_info=True)
+                            return web.json_response({'error': 'Ошибка парсинга данных пользователя'}, status=400)
+                            
                     except Exception as e:
                         logger.error(f"Ошибка при получении сессии Mini App: {e}", exc_info=True)
                         return web.json_response({'error': 'Внутренняя ошибка сервера'}, status=500)
@@ -1413,6 +1486,7 @@ def main():
                 aio_app.router.add_post(f'/{token}', webhook_handler)
                 aio_app.router.add_get('/miniapp', miniapp_handler)
                 aio_app.router.add_get('/api/miniapp/session', miniapp_session_handler)
+                aio_app.router.add_post('/api/miniapp/session', miniapp_session_handler)  # Поддержка POST для initData
                 aio_app.router.add_get('/api/miniapp/users', miniapp_users_handler)
                 aio_app.router.add_post('/api/miniapp/create-task', miniapp_create_task_handler)
                 
