@@ -9,6 +9,7 @@ import asyncio
 import secrets
 from datetime import datetime
 from typing import Dict, Optional, List
+from urllib.parse import urlencode
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -694,6 +695,10 @@ async def handle_reply_with_mention(update: Update, context: ContextTypes.DEFAUL
     if webhook_url and not webhook_url.startswith("http"):
         webhook_url = f"https://{webhook_url}"
     
+    # Убираем завершающий слеш, если есть
+    if webhook_url and webhook_url.endswith("/"):
+        webhook_url = webhook_url.rstrip("/")
+    
     if not webhook_url:
         # Если нет webhook URL, используем альтернативный способ через callback
         await message.reply_text(
@@ -720,13 +725,82 @@ async def handle_reply_with_mention(update: Update, context: ContextTypes.DEFAUL
     }
     
     # Создаем кнопку для открытия Mini App
-    web_app_url = f"{webhook_url}/miniapp?token={session_token}"
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            "📋 Создать задачу",
-            web_app=WebAppInfo(url=web_app_url)
-        )]
-    ])
+    # Правильно кодируем параметры URL
+    query_params = urlencode({"token": session_token})
+    web_app_url = f"{webhook_url}/miniapp?{query_params}"
+    
+    # Логируем URL для отладки
+    logger.info(f"Создание кнопки Web App с URL: {web_app_url}")
+    logger.info(f"Webhook URL: {webhook_url}, Session token length: {len(session_token)}")
+    
+    # Проверяем, что URL валидный (начинается с https://)
+    if not web_app_url.startswith("https://"):
+        logger.error(f"Невалидный URL для Web App: {web_app_url}")
+        await message.reply_text(
+            "⚠️ Ошибка конфигурации: URL для Mini App невалидный. Обратитесь к администратору."
+        )
+        return
+    
+    # Проверяем длину URL (Telegram имеет ограничение)
+    if len(web_app_url) > 2048:
+        logger.error(f"URL слишком длинный: {len(web_app_url)} символов")
+        await message.reply_text(
+            "⚠️ Ошибка: URL слишком длинный. Попробуйте позже."
+        )
+        return
+    
+    try:
+        # Валидация URL перед созданием WebAppInfo
+        # Telegram требует, чтобы URL был валидным HTTPS URL
+        from urllib.parse import urlparse
+        parsed_url = urlparse(web_app_url)
+        if parsed_url.scheme != 'https':
+            raise ValueError(f"Web App URL должен использовать HTTPS, получен: {parsed_url.scheme}")
+        if not parsed_url.netloc:
+            raise ValueError(f"Web App URL должен содержать домен, получен: {web_app_url}")
+        
+        logger.info(f"URL валидирован: схема={parsed_url.scheme}, домен={parsed_url.netloc}")
+        
+        # Создаем WebAppInfo объект
+        # В python-telegram-bot 20.x используется именно такой синтаксис
+        web_app_info = WebAppInfo(url=web_app_url)
+        logger.info(f"WebAppInfo создан успешно")
+        
+        # Создаем кнопку с Web App
+        # В python-telegram-bot 20.x параметр называется web_app
+        # Важно: используем позиционные аргументы для совместимости
+        button = InlineKeyboardButton(
+            text="📋 Создать задачу",
+            web_app=web_app_info
+        )
+        logger.info(f"Кнопка создана успешно")
+        
+        # Создаем клавиатуру
+        keyboard = InlineKeyboardMarkup([[button]])
+        logger.info(f"Клавиатура создана успешно")
+        
+    except ValueError as e:
+        # ValueError может возникнуть при валидации URL
+        logger.error(f"ValueError при создании кнопки Web App: {e}", exc_info=True)
+        await message.reply_text(
+            f"⚠️ Ошибка конфигурации: {str(e)}. Обратитесь к администратору."
+        )
+        return
+    except TypeError as e:
+        # TypeError может возникнуть, если неправильные параметры
+        logger.error(f"TypeError при создании кнопки Web App: {e}", exc_info=True)
+        logger.error(f"Проверьте синтаксис InlineKeyboardButton и WebAppInfo")
+        await message.reply_text(
+            "⚠️ Ошибка при создании кнопки. Попробуйте позже."
+        )
+        return
+    except Exception as e:
+        logger.error(f"Ошибка при создании кнопки Web App: {e}", exc_info=True)
+        logger.error(f"Тип ошибки: {type(e).__name__}")
+        await message.reply_text(
+            "⚠️ Ошибка при создании кнопки. Попробуйте позже."
+        )
+        return
     
     message_text = (
         f"📋 Предложение создать задачу\n\n"
