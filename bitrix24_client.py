@@ -243,13 +243,31 @@ class Bitrix24Client:
         """
         try:
             # Проверяем, существует ли поле
-            result = self._make_request("user.userfield.get", {"FIELD": "UF_TELEGRAM_ID"})
-            
-            if result.get("result") and len(result.get("result", [])) > 0:
-                # Поле уже существует
-                return True
+            # Используем user.userfield.get без параметров для получения всех полей
+            # или с фильтром по FIELD_NAME
+            try:
+                result = self._make_request("user.userfield.get", {})
+                fields = result.get("result", [])
+                
+                # Проверяем, есть ли поле UF_TELEGRAM_ID
+                for field in fields:
+                    if isinstance(field, dict) and field.get("FIELD_NAME") == "UF_TELEGRAM_ID":
+                        logger.info("Поле UF_TELEGRAM_ID уже существует в Bitrix24")
+                        return True
+            except Exception as get_error:
+                # Если метод не работает, пробуем другой способ
+                logger.debug(f"Метод user.userfield.get не сработал: {get_error}")
+                # Пробуем получить конкретное поле
+                try:
+                    result = self._make_request("user.userfield.get", {"FIELD": "UF_TELEGRAM_ID"})
+                    if result.get("result") and len(result.get("result", [])) > 0:
+                        logger.info("Поле UF_TELEGRAM_ID уже существует в Bitrix24")
+                        return True
+                except Exception:
+                    pass
             
             # Создаем поле, если его нет
+            logger.info("Создание поля UF_TELEGRAM_ID в Bitrix24...")
             field_data = {
                 "fields": {
                     "FIELD_NAME": "UF_TELEGRAM_ID",
@@ -274,11 +292,19 @@ class Bitrix24Client:
             }
             
             create_result = self._make_request("user.userfield.add", field_data)
-            return create_result.get("result") is not None
+            if create_result.get("result"):
+                logger.info("✅ Поле UF_TELEGRAM_ID успешно создано в Bitrix24")
+                return True
+            else:
+                error = create_result.get("error", "Неизвестная ошибка")
+                logger.error(f"❌ Не удалось создать поле UF_TELEGRAM_ID: {error}")
+                return False
             
         except Exception as e:
-            # Если поле уже существует или произошла другая ошибка, продолжаем работу
-            # В Bitrix24 может быть ошибка, если поле уже существует, но это не критично
+            # Логируем ошибку для диагностики
+            logger.error(f"Ошибка при проверке/создании поля UF_TELEGRAM_ID: {e}", exc_info=True)
+            # Возвращаем True, чтобы бот продолжал работать
+            # Проблема может быть в правах вебхука или поле уже существует
             return True
     
     def update_user_telegram_id(self, user_id: int, telegram_id: int) -> bool:
@@ -294,7 +320,9 @@ class Bitrix24Client:
         """
         try:
             # Убеждаемся, что поле существует
-            self.ensure_telegram_id_field()
+            field_exists = self.ensure_telegram_id_field()
+            if not field_exists:
+                logger.warning(f"Поле UF_TELEGRAM_ID может не существовать. Попытка сохранения для пользователя {user_id}")
             
             # Обновляем пользователя
             update_data = {
@@ -305,9 +333,19 @@ class Bitrix24Client:
             }
             
             result = self._make_request("user.update", update_data)
-            return result.get("result") is True
+            success = result.get("result") is True
+            
+            if success:
+                logger.info(f"✅ Telegram ID {telegram_id} успешно сохранен для пользователя Bitrix24 {user_id}")
+            else:
+                error = result.get("error", "Неизвестная ошибка")
+                error_description = result.get("error_description", "")
+                logger.error(f"❌ Не удалось сохранить Telegram ID для пользователя {user_id}: {error} - {error_description}")
+            
+            return success
             
         except Exception as e:
+            logger.error(f"Ошибка при сохранении Telegram ID для пользователя {user_id}: {e}", exc_info=True)
             return False
     
     def get_user_by_telegram_id(self, telegram_id: int) -> Optional[Dict]:
@@ -328,11 +366,17 @@ class Bitrix24Client:
                 }
             })
             
-            if result.get("result") and len(result.get("result", [])) > 0:
-                return result["result"][0]
+            users = result.get("result", [])
+            if users:
+                if isinstance(users, list) and len(users) > 0:
+                    logger.debug(f"Найден пользователь Bitrix24 по Telegram ID {telegram_id}: {users[0].get('ID')}")
+                    return users[0]
+                elif isinstance(users, dict):
+                    logger.debug(f"Найден пользователь Bitrix24 по Telegram ID {telegram_id}: {users.get('ID')}")
+                    return users
             
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Ошибка при поиске пользователя по Telegram ID {telegram_id}: {e}")
         
         return None
     
@@ -357,3 +401,38 @@ class Bitrix24Client:
             pass
         
         return None
+    
+    def load_all_telegram_mappings(self) -> Dict[int, int]:
+        """
+        Загрузка всех связей Telegram ID -> Bitrix24 User ID из Bitrix24
+        
+        Returns:
+            Словарь {telegram_id: bitrix_user_id}
+        """
+        mappings = {}
+        try:
+            # Получаем всех пользователей
+            users = self.get_all_users(active_only=True)
+            
+            loaded_count = 0
+            for user in users:
+                user_id = user.get("ID")
+                telegram_id_str = user.get("UF_TELEGRAM_ID")
+                
+                if user_id and telegram_id_str:
+                    try:
+                        telegram_id = int(telegram_id_str)
+                        mappings[telegram_id] = int(user_id)
+                        loaded_count += 1
+                    except (ValueError, TypeError):
+                        continue
+            
+            if loaded_count > 0:
+                logger.info(f"✅ Загружено {loaded_count} связей Telegram ID -> Bitrix24 из Bitrix24")
+            else:
+                logger.info("ℹ️ В Bitrix24 не найдено сохраненных связей Telegram ID")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке связей из Bitrix24: {e}", exc_info=True)
+        
+        return mappings
