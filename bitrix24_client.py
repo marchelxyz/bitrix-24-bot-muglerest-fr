@@ -388,19 +388,73 @@ class Bitrix24Client:
             True если обновление прошло успешно, False в случае ошибки
         """
         try:
-            # Обновляем пользователя, используя название поля из конфигурации
-            update_data = {
+            # Сначала проверяем, существует ли поле
+            try:
+                field_result = self._make_request("user.userfield.get", {"FIELD": self.telegram_field_name})
+                field_exists = field_result.get("result") and len(field_result.get("result", [])) > 0
+                if not field_exists:
+                    logger.warning(f"⚠️ Поле '{self.telegram_field_name}' не найдено в Bitrix24. Попытка создать...")
+                    # Пытаемся создать поле, если его нет
+                    field_created = self.ensure_telegram_id_field()
+                    if not field_created:
+                        logger.error(f"❌ Не удалось создать поле '{self.telegram_field_name}'. Сохранение может не работать.")
+            except Exception as field_check_error:
+                logger.debug(f"Не удалось проверить существование поля: {field_check_error}")
+                # Продолжаем попытку обновления, возможно поле существует, но недоступно через API
+            
+            # В Bitrix24 API метод user.update может принимать данные в разных форматах
+            # Пробуем несколько вариантов для максимальной совместимости
+            
+            telegram_id_str = str(telegram_id)
+            logger.info(f"📝 Попытка сохранить Telegram ID {telegram_id} в поле '{self.telegram_field_name}' для пользователя Bitrix24 {user_id}")
+            
+            # Вариант 1: Формат с "fields" (стандартный)
+            update_data_v1 = {
                 "ID": user_id,
                 "fields": {
-                    self.telegram_field_name: str(telegram_id)
+                    self.telegram_field_name: telegram_id_str
                 }
             }
             
-            logger.info(f"📝 Попытка сохранить Telegram ID {telegram_id} в поле '{self.telegram_field_name}' для пользователя Bitrix24 {user_id}")
-            logger.debug(f"Данные для обновления: {update_data}")
+            logger.debug(f"Попытка 1: Формат с 'fields' - {update_data_v1}")
+            result = self._make_request("user.update", update_data_v1)
+            logger.debug(f"Ответ от Bitrix24 (попытка 1): {result}")
+            # В Bitrix24 API метод user.update может возвращать True или ID обновленного пользователя
+            success = result.get("result") is True or (isinstance(result.get("result"), (int, str)) and str(result.get("result")) == str(user_id))
             
-            result = self._make_request("user.update", update_data)
-            success = result.get("result") is True
+            # Если первый вариант не сработал, пробуем альтернативный формат
+            if not success:
+                error_msg = result.get("error", "")
+                error_desc = result.get("error_description", "")
+                logger.warning(f"Первый вариант не сработал: {error_msg} - {error_desc}")
+                logger.info(f"Пробуем альтернативный формат...")
+                
+                # Вариант 2: Прямая передача полей (без вложенного "fields")
+                update_data_v2 = {
+                    "ID": user_id,
+                    self.telegram_field_name: telegram_id_str
+                }
+                logger.debug(f"Попытка 2: Прямая передача полей - {update_data_v2}")
+                result = self._make_request("user.update", update_data_v2)
+                logger.debug(f"Ответ от Bitrix24 (попытка 2): {result}")
+                # В Bitrix24 API метод user.update может возвращать True или ID обновленного пользователя
+                success = result.get("result") is True or (isinstance(result.get("result"), (int, str)) and str(result.get("result")) == str(user_id))
+                
+                # Если и второй вариант не сработал, пробуем третий вариант - только поле
+                if not success:
+                    logger.warning(f"Второй вариант не сработал, пробуем третий вариант...")
+                    # Вариант 3: Только поле в корне запроса (некоторые версии Bitrix24 требуют такой формат)
+                    update_data_v3 = {
+                        self.telegram_field_name: telegram_id_str
+                    }
+                    logger.debug(f"Попытка 3: Только поле - {update_data_v3}")
+                    try:
+                        result = self._make_request("user.update", {"ID": user_id, **update_data_v3})
+                        logger.debug(f"Ответ от Bitrix24 (попытка 3): {result}")
+                        # В Bitrix24 API метод user.update может возвращать True или ID обновленного пользователя
+                        success = result.get("result") is True or (isinstance(result.get("result"), (int, str)) and str(result.get("result")) == str(user_id))
+                    except Exception as e:
+                        logger.debug(f"Ошибка при третьей попытке: {e}")
             
             if success:
                 logger.info(f"✅ Telegram ID {telegram_id} успешно сохранен в поле '{self.telegram_field_name}' для пользователя Bitrix24 {user_id}")
@@ -408,31 +462,54 @@ class Bitrix24Client:
                 # Проверяем, что данные действительно сохранились
                 # Делаем небольшую задержку перед проверкой (Bitrix24 может обрабатывать обновление асинхронно)
                 import time
-                time.sleep(0.5)  # Небольшая задержка для обработки обновления
+                time.sleep(1)  # Увеличиваем задержку до 1 секунды
                 
-                # Проверяем сохранение
-                user_info = self.get_user_by_id(user_id)
-                if user_info:
-                    saved_telegram_id = user_info.get(self.telegram_field_name)
-                    if saved_telegram_id:
-                        logger.info(f"✅ Подтверждено: Telegram ID {saved_telegram_id} найден в профиле пользователя {user_id}")
-                    else:
-                        logger.warning(f"⚠️ Telegram ID не найден в профиле пользователя {user_id} после сохранения. Возможно, поле не возвращается в API.")
-                        logger.info(f"💡 Попробуйте проверить профиль пользователя в Bitrix24 вручную - поле '{self.telegram_field_name}' должно содержать значение {telegram_id}")
+                # Проверяем сохранение несколько раз (на случай асинхронной обработки)
+                saved_telegram_id = None
+                for attempt in range(3):
+                    user_info = self.get_user_by_id(user_id)
+                    if user_info:
+                        saved_telegram_id = user_info.get(self.telegram_field_name)
+                        if saved_telegram_id:
+                            logger.info(f"✅ Подтверждено (попытка {attempt + 1}): Telegram ID {saved_telegram_id} найден в профиле пользователя {user_id}")
+                            break
+                    
+                    if attempt < 2:
+                        time.sleep(0.5)  # Ждем перед следующей попыткой
+                
+                if not saved_telegram_id:
+                    logger.warning(f"⚠️ Telegram ID не найден в профиле пользователя {user_id} после сохранения.")
+                    logger.warning(f"   Это может означать, что:")
+                    logger.warning(f"   1. Поле '{self.telegram_field_name}' не возвращается в API (но может быть сохранено)")
+                    logger.warning(f"   2. Bitrix24 обрабатывает обновление асинхронно (попробуйте проверить позже)")
+                    logger.info(f"💡 Проверьте профиль пользователя в Bitrix24 вручную:")
+                    logger.info(f"   Настройки → Пользователи → Откройте профиль пользователя {user_id}")
+                    logger.info(f"   Поле '{self.telegram_field_name}' должно содержать значение {telegram_id}")
             else:
                 error = result.get("error", "Неизвестная ошибка")
                 error_description = result.get("error_description", "")
-                logger.error(f"❌ Не удалось сохранить Telegram ID для пользователя {user_id}: {error} - {error_description}")
-                logger.error(f"Полный ответ от Bitrix24: {result}")
-                logger.info(f"💡 Убедитесь, что:")
-                logger.info(f"   1. Поле '{self.telegram_field_name}' существует в Bitrix24")
-                logger.info(f"   2. Вебхук имеет права на изменение пользователей (user.update)")
-                logger.info(f"   3. Вебхук имеет права на изменение пользовательских полей")
+                error_code = result.get("error_code", "")
+                logger.error(f"❌ Не удалось сохранить Telegram ID для пользователя {user_id}")
+                logger.error(f"   Ошибка: {error}")
+                if error_code:
+                    logger.error(f"   Код ошибки: {error_code}")
+                if error_description:
+                    logger.error(f"   Описание: {error_description}")
+                logger.error(f"   Полный ответ от Bitrix24: {result}")
+                logger.info(f"💡 Возможные причины:")
+                logger.info(f"   1. Поле '{self.telegram_field_name}' не существует в Bitrix24")
+                logger.info(f"   2. Вебхук не имеет прав на изменение пользователей (user.update)")
+                logger.info(f"   3. Вебхук не имеет прав на изменение пользовательских полей")
+                logger.info(f"   4. Поле '{self.telegram_field_name}' не доступно для записи через API")
+                logger.info(f"💡 Проверьте права вебхука в Bitrix24:")
+                logger.info(f"   Настройки → Разработчикам → Входящий вебхук → Выберите ваш вебхук")
+                logger.info(f"   Убедитесь, что включены права: user.update")
             
             return success
             
         except Exception as e:
             logger.error(f"Ошибка при сохранении Telegram ID для пользователя {user_id}: {e}", exc_info=True)
+            logger.error(f"Тип ошибки: {type(e).__name__}")
             return False
     
     def get_user_by_telegram_id(self, telegram_id: int) -> Optional[Dict]:
