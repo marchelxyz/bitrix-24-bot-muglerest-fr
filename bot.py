@@ -42,21 +42,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Инициализация клиента Битрикс24
+# Название поля для Telegram ID можно настроить через переменную окружения BITRIX24_TELEGRAM_FIELD_NAME
+# По умолчанию используется UF_TELEGRAM (так как пользователь создал поле с названием "Telegram")
 bitrix_client = Bitrix24Client(
     domain=os.getenv("BITRIX24_DOMAIN"),
-    webhook_token=os.getenv("BITRIX24_WEBHOOK_TOKEN")
+    webhook_token=os.getenv("BITRIX24_WEBHOOK_TOKEN"),
+    telegram_field_name=os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_TELEGRAM")
 )
 
-# Создаем поле UF_TELEGRAM_ID в Bitrix24 при старте (если его еще нет)
-# Это поле используется для сохранения Telegram ID пользователей
+# Проверяем существование поля для Telegram ID в Bitrix24 при старте
+# Поле должно быть создано вручную в Bitrix24 (Настройки → Пользователи → Пользовательские поля)
+# По умолчанию используется поле UF_TELEGRAM (можно настроить через BITRIX24_TELEGRAM_FIELD_NAME)
 try:
-    field_created = bitrix_client.ensure_telegram_id_field()
-    if field_created:
-        logger.info("✅ Поле UF_TELEGRAM_ID проверено/создано в Bitrix24")
+    field_exists = bitrix_client.ensure_telegram_id_field()
+    if field_exists:
+        logger.info(f"✅ Поле {bitrix_client.telegram_field_name} найдено в Bitrix24")
     else:
-        logger.warning("⚠️ Не удалось создать поле UF_TELEGRAM_ID в Bitrix24. Проверьте права вебхука.")
+        logger.warning(f"⚠️ Поле {bitrix_client.telegram_field_name} не найдено в Bitrix24. Убедитесь, что поле создано в профиле пользователя.")
+        logger.info(f"💡 Создайте поле '{bitrix_client.telegram_field_name}' в Bitrix24: Настройки → Пользователи → Пользовательские поля")
 except Exception as e:
-    logger.error(f"❌ Ошибка при проверке поля UF_TELEGRAM_ID: {e}", exc_info=True)
+    logger.error(f"❌ Ошибка при проверке поля {bitrix_client.telegram_field_name}: {e}", exc_info=True)
     logger.warning("Бот будет работать, но сохранение Telegram ID в Bitrix24 может не работать")
 
 # Загружаем существующие связи из Bitrix24 при старте
