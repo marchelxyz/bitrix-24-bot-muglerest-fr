@@ -258,11 +258,11 @@ class Bitrix24Client:
     
     def ensure_telegram_id_field(self) -> bool:
         """
-        Проверка существования пользовательского поля для Telegram ID в Bitrix24
-        Поле должно быть создано вручную в Bitrix24 перед использованием
+        Проверка и создание пользовательского поля для Telegram ID в Bitrix24
+        Поле создается один раз и становится доступным для всех пользователей
         
         Returns:
-            True если поле существует, False в случае ошибки
+            True если поле существует или было создано, False в случае ошибки
         """
         try:
             # Проверяем, существует ли поле
@@ -275,7 +275,7 @@ class Bitrix24Client:
                 # Проверяем, есть ли поле с нужным названием
                 for field in fields:
                     if isinstance(field, dict) and field.get("FIELD_NAME") == self.telegram_field_name:
-                        logger.info(f"Поле {self.telegram_field_name} найдено в Bitrix24")
+                        logger.info(f"✅ Поле {self.telegram_field_name} уже существует в Bitrix24")
                         return True
             except Exception as get_error:
                 # Если метод не работает, пробуем другой способ
@@ -284,22 +284,65 @@ class Bitrix24Client:
                 try:
                     result = self._make_request("user.userfield.get", {"FIELD": self.telegram_field_name})
                     if result.get("result") and len(result.get("result", [])) > 0:
-                        logger.info(f"Поле {self.telegram_field_name} найдено в Bitrix24")
+                        logger.info(f"✅ Поле {self.telegram_field_name} уже существует в Bitrix24")
                         return True
                 except Exception:
                     pass
             
-            # Поле не найдено - пользователь должен создать его вручную в Bitrix24
-            logger.warning(f"⚠️ Поле {self.telegram_field_name} не найдено в Bitrix24. Убедитесь, что поле создано в профиле пользователя.")
-            logger.info(f"💡 Создайте поле '{self.telegram_field_name}' в Bitrix24: Настройки → Пользователи → Пользовательские поля")
-            return False
+            # Поле не найдено - создаем его
+            logger.info(f"📝 Создание поля {self.telegram_field_name} в Bitrix24...")
+            field_data = {
+                "fields": {
+                    "FIELD_NAME": self.telegram_field_name,
+                    "USER_TYPE_ID": "string",  # Тип поля - строка
+                    "XML_ID": "TELEGRAM_ID",
+                    "SORT": 100,
+                    "MULTIPLE": "N",  # Одно значение (не множественное)
+                    "MANDATORY": "N",  # Не обязательное поле
+                    "SHOW_FILTER": "Y",  # Показывать в фильтрах
+                    "SHOW_IN_LIST": "Y",  # Показывать в списке пользователей
+                    "EDIT_IN_LIST": "Y",  # Можно редактировать в списке
+                    "IS_SEARCHABLE": "Y",  # Доступно для поиска
+                    "SETTINGS": {
+                        "DEFAULT_VALUE": "",
+                        "SIZE": 20,  # Размер поля
+                        "ROWS": 1,
+                        "MIN_LENGTH": 0,
+                        "MAX_LENGTH": 0,
+                        "REGEXP": ""
+                    },
+                    "LIST": [
+                        {"VALUE": "Telegram ID", "DEF": "Y"}  # Значение по умолчанию для списка
+                    ]
+                }
+            }
+            
+            create_result = self._make_request("user.userfield.add", field_data)
+            if create_result.get("result"):
+                field_id = create_result.get("result")
+                logger.info(f"✅ Поле {self.telegram_field_name} успешно создано в Bitrix24 (ID: {field_id})")
+                logger.info(f"💡 Поле теперь доступно для всех пользователей в их профилях")
+                return True
+            else:
+                error = create_result.get("error", "Неизвестная ошибка")
+                error_description = create_result.get("error_description", "")
+                logger.error(f"❌ Не удалось создать поле {self.telegram_field_name}: {error}")
+                if error_description:
+                    logger.error(f"   Описание ошибки: {error_description}")
+                logger.info(f"💡 Убедитесь, что вебхук имеет права на создание пользовательских полей:")
+                logger.info(f"   Настройки → Разработчикам → Входящий вебхук → Выберите ваш вебхук")
+                logger.info(f"   Включите права: user.userfield.add и user.userfield.get")
+                return False
             
         except Exception as e:
             # Логируем ошибку для диагностики
-            logger.error(f"Ошибка при проверке поля {self.telegram_field_name}: {e}", exc_info=True)
-            # Возвращаем True, чтобы бот продолжал работать
-            # Проблема может быть в правах вебхука
-            return True
+            logger.error(f"Ошибка при проверке/создании поля {self.telegram_field_name}: {e}", exc_info=True)
+            logger.info(f"💡 Возможные причины:")
+            logger.info(f"   1. Вебхук не имеет прав на создание пользовательских полей")
+            logger.info(f"   2. Поле с таким кодом уже существует, но недоступно через API")
+            logger.info(f"   3. Проблемы с подключением к Bitrix24")
+            # Возвращаем False, чтобы показать, что поле не создано
+            return False
     
     def update_user_telegram_id(self, user_id: int, telegram_id: int) -> bool:
         """
