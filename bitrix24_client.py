@@ -158,11 +158,31 @@ class Bitrix24Client:
             Информация о пользователе или None
         """
         try:
+            # В Bitrix24 API метод user.get может не возвращать пользовательские поля по умолчанию
+            # Пробуем сначала без SELECT - это должно вернуть все поля включая пользовательские
             result = self._make_request("user.get", {"ID": user_id})
             if result.get("result"):
-                return result["result"][0] if isinstance(result["result"], list) else result["result"]
-        except Exception:
-            pass
+                user_data = result["result"][0] if isinstance(result["result"], list) else result["result"]
+                
+                # Проверяем, есть ли пользовательское поле в результате
+                if self.telegram_field_name not in user_data:
+                    # Если поля нет, пробуем явно запросить его через SELECT
+                    logger.debug(f"Поле {self.telegram_field_name} не найдено в результате, пробуем явный запрос через SELECT")
+                    try:
+                        result_with_select = self._make_request("user.get", {
+                            "ID": user_id,
+                            "SELECT": [self.telegram_field_name]
+                        })
+                        if result_with_select.get("result"):
+                            user_data_select = result_with_select["result"][0] if isinstance(result_with_select["result"], list) else result_with_select["result"]
+                            # Объединяем данные
+                            user_data.update(user_data_select)
+                    except Exception as select_error:
+                        logger.debug(f"Ошибка при запросе с SELECT: {select_error}")
+                
+                return user_data
+        except Exception as e:
+            logger.debug(f"Ошибка при получении пользователя {user_id}: {e}")
         return None
     
     def search_users(self, query: str) -> List[Dict]:
@@ -194,7 +214,10 @@ class Bitrix24Client:
         try:
             # В Битрикс24 REST API метод user.get возвращает всех пользователей
             # Используем фильтр для активных пользователей, если нужно
-            params = {}
+            # Явно запрашиваем пользовательское поле с Telegram ID
+            params = {
+                "SELECT": [self.telegram_field_name]  # Запрашиваем поле с Telegram ID
+            }
             if active_only:
                 params["FILTER"] = {"ACTIVE": "Y"}
             
@@ -214,9 +237,18 @@ class Bitrix24Client:
             return []
         except Exception as e:
             logger.error(f"Ошибка при получении всех пользователей: {e}")
-            # Fallback: используем поиск по пустой строке
+            # Fallback: пробуем без SELECT (вернутся все поля)
             try:
-                return self.search_users("")
+                params = {}
+                if active_only:
+                    params["FILTER"] = {"ACTIVE": "Y"}
+                result = self._make_request("user.get", params)
+                users = result.get("result", [])
+                if isinstance(users, list):
+                    return users
+                if isinstance(users, dict):
+                    return [users]
+                return []
             except Exception:
                 return []
     
@@ -364,16 +396,38 @@ class Bitrix24Client:
                 }
             }
             
+            logger.info(f"📝 Попытка сохранить Telegram ID {telegram_id} в поле '{self.telegram_field_name}' для пользователя Bitrix24 {user_id}")
+            logger.debug(f"Данные для обновления: {update_data}")
+            
             result = self._make_request("user.update", update_data)
             success = result.get("result") is True
             
             if success:
                 logger.info(f"✅ Telegram ID {telegram_id} успешно сохранен в поле '{self.telegram_field_name}' для пользователя Bitrix24 {user_id}")
+                
+                # Проверяем, что данные действительно сохранились
+                # Делаем небольшую задержку перед проверкой (Bitrix24 может обрабатывать обновление асинхронно)
+                import time
+                time.sleep(0.5)  # Небольшая задержка для обработки обновления
+                
+                # Проверяем сохранение
+                user_info = self.get_user_by_id(user_id)
+                if user_info:
+                    saved_telegram_id = user_info.get(self.telegram_field_name)
+                    if saved_telegram_id:
+                        logger.info(f"✅ Подтверждено: Telegram ID {saved_telegram_id} найден в профиле пользователя {user_id}")
+                    else:
+                        logger.warning(f"⚠️ Telegram ID не найден в профиле пользователя {user_id} после сохранения. Возможно, поле не возвращается в API.")
+                        logger.info(f"💡 Попробуйте проверить профиль пользователя в Bitrix24 вручную - поле '{self.telegram_field_name}' должно содержать значение {telegram_id}")
             else:
                 error = result.get("error", "Неизвестная ошибка")
                 error_description = result.get("error_description", "")
                 logger.error(f"❌ Не удалось сохранить Telegram ID для пользователя {user_id}: {error} - {error_description}")
-                logger.info(f"💡 Убедитесь, что поле '{self.telegram_field_name}' существует в Bitrix24 и вебхук имеет права на его изменение")
+                logger.error(f"Полный ответ от Bitrix24: {result}")
+                logger.info(f"💡 Убедитесь, что:")
+                logger.info(f"   1. Поле '{self.telegram_field_name}' существует в Bitrix24")
+                logger.info(f"   2. Вебхук имеет права на изменение пользователей (user.update)")
+                logger.info(f"   3. Вебхук имеет права на изменение пользовательских полей")
             
             return success
             
@@ -393,10 +447,12 @@ class Bitrix24Client:
         """
         try:
             # Ищем пользователя по пользовательскому полю (используем название из конфигурации)
+            # Явно запрашиваем пользовательское поле в SELECT для надежности
             result = self._make_request("user.get", {
                 "FILTER": {
                     self.telegram_field_name: str(telegram_id)
-                }
+                },
+                "SELECT": [self.telegram_field_name]  # Явно запрашиваем поле с Telegram ID
             })
             
             users = result.get("result", [])
@@ -407,6 +463,21 @@ class Bitrix24Client:
                 elif isinstance(users, dict):
                     logger.debug(f"Найден пользователь Bitrix24 по Telegram ID {telegram_id}: {users.get('ID')}")
                     return users
+            
+            # Если не найдено с SELECT, пробуем без SELECT (вернутся все поля)
+            result_all = self._make_request("user.get", {
+                "FILTER": {
+                    self.telegram_field_name: str(telegram_id)
+                }
+            })
+            users_all = result_all.get("result", [])
+            if users_all:
+                if isinstance(users_all, list) and len(users_all) > 0:
+                    logger.debug(f"Найден пользователь Bitrix24 по Telegram ID {telegram_id} (без SELECT): {users_all[0].get('ID')}")
+                    return users_all[0]
+                elif isinstance(users_all, dict):
+                    logger.debug(f"Найден пользователь Bitrix24 по Telegram ID {telegram_id} (без SELECT): {users_all.get('ID')}")
+                    return users_all
             
         except Exception as e:
             logger.debug(f"Ошибка при поиске пользователя по Telegram ID {telegram_id}: {e}")
@@ -424,14 +495,23 @@ class Bitrix24Client:
             Telegram ID или None
         """
         try:
+            # Явно запрашиваем пользовательское поле с Telegram ID
             user_info = self.get_user_by_id(user_id)
-            if user_info and user_info.get(self.telegram_field_name):
-                try:
-                    return int(user_info[self.telegram_field_name])
-                except (ValueError, TypeError):
-                    return None
-        except Exception:
-            pass
+            if user_info:
+                telegram_id_value = user_info.get(self.telegram_field_name)
+                if telegram_id_value:
+                    try:
+                        # Значение может быть строкой или числом
+                        telegram_id = int(telegram_id_value) if telegram_id_value else None
+                        logger.debug(f"Получен Telegram ID {telegram_id} для пользователя Bitrix24 {user_id}")
+                        return telegram_id
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Не удалось преобразовать Telegram ID в число для пользователя {user_id}: {telegram_id_value}, ошибка: {e}")
+                        return None
+                else:
+                    logger.debug(f"Поле {self.telegram_field_name} не найдено или пусто для пользователя {user_id}")
+        except Exception as e:
+            logger.debug(f"Ошибка при получении Telegram ID для пользователя {user_id}: {e}")
         
         return None
     
