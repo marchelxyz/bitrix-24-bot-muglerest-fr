@@ -79,13 +79,17 @@ else:
 # Теперь связи хранятся в PostgreSQL, но можем загрузить из Bitrix24 для миграции
 if DATABASE_AVAILABLE:
     try:
-        logger.info("Загрузка связей из Bitrix24 для синхронизации с БД...")
+        logger.info("Загрузка связей из Bitrix24 для синхронизации с PostgreSQL...")
         loaded_mappings = bitrix_client.load_all_telegram_mappings()
         if loaded_mappings:
             # Сохраняем в БД вместо памяти
+            saved_count = 0
             for telegram_id, bitrix_id in loaded_mappings.items():
-                database.set_telegram_to_bitrix_mapping(telegram_id, bitrix_id)
-            logger.info(f"✅ Синхронизировано {len(loaded_mappings)} связей из Bitrix24 в PostgreSQL")
+                if database.set_telegram_to_bitrix_mapping(telegram_id, bitrix_id):
+                    saved_count += 1
+                # Также обновляем локальный кеш
+                TELEGRAM_TO_BITRIX_MAPPING[telegram_id] = bitrix_id
+            logger.info(f"✅ Синхронизировано {saved_count} из {len(loaded_mappings)} связей из Bitrix24 в PostgreSQL")
         else:
             logger.info("ℹ️ В Bitrix24 пока нет сохраненных связей. Используйте команду /link для связывания.")
     except Exception as e:
@@ -300,9 +304,12 @@ def get_bitrix_user_id_by_telegram_id(telegram_id: int) -> Optional[int]:
         if user_info and user_info.get("ID"):
             try:
                 bitrix_id = int(user_info.get("ID"))
-                # Сохраняем в БД и локальное хранилище
+                # Сохраняем в БД (основной источник истины)
                 if DATABASE_AVAILABLE:
-                    database.set_telegram_to_bitrix_mapping(telegram_id, bitrix_id)
+                    db_saved = database.set_telegram_to_bitrix_mapping(telegram_id, bitrix_id)
+                    if db_saved:
+                        logger.debug(f"✅ Связь сохранена в PostgreSQL из API Bitrix24: Telegram {telegram_id} → Bitrix {bitrix_id}")
+                # Сохраняем в локальное хранилище для быстрого доступа
                 TELEGRAM_TO_BITRIX_MAPPING[telegram_id] = bitrix_id
                 return bitrix_id
             except (ValueError, TypeError):
@@ -611,41 +618,53 @@ async def link_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Сохраняем Telegram ID в Bitrix24
-        success = bitrix_client.update_user_telegram_id(bitrix_user_id, telegram_user_id)
+        # Сохраняем связь в PostgreSQL БД (основной источник истины)
+        db_success = False
+        if DATABASE_AVAILABLE:
+            db_success = database.set_telegram_to_bitrix_mapping(telegram_user_id, bitrix_user_id)
+            if db_success:
+                logger.info(f"✅ Связь сохранена в PostgreSQL: Telegram {telegram_user_id} → Bitrix {bitrix_user_id}")
+            else:
+                logger.warning(f"⚠️ Не удалось сохранить связь в PostgreSQL")
         
-        if success:
-            # Сохраняем в PostgreSQL БД и локальное хранилище для быстрого доступа
-            if DATABASE_AVAILABLE:
-                database.set_telegram_to_bitrix_mapping(telegram_user_id, bitrix_user_id)
-            TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = bitrix_user_id
-            
-            user_name = f"{user_info.get('NAME', '')} {user_info.get('LAST_NAME', '')}".strip()
-            
+        # Также сохраняем в локальное хранилище для быстрого доступа
+        TELEGRAM_TO_BITRIX_MAPPING[telegram_user_id] = bitrix_user_id
+        
+        # Пытаемся сохранить Telegram ID в Bitrix24 (опционально, для синхронизации)
+        bitrix_success = bitrix_client.update_user_telegram_id(bitrix_user_id, telegram_user_id)
+        
+        user_name = f"{user_info.get('NAME', '')} {user_info.get('LAST_NAME', '')}".strip()
+        
+        if db_success or DATABASE_AVAILABLE == False:
+            # Если БД недоступна, работаем с локальным хранилищем
             response_text = (
-                f"✅ Связь установлена и сохранена в Bitrix24:\n"
+                f"✅ Связь установлена и сохранена в базе данных:\n"
                 f"Ваш Telegram аккаунт (ID: {telegram_user_id}) → "
                 f"{user_name} (ID: {bitrix_user_id})\n\n"
             )
             
-            # Проверяем, настроен ли исходящий вебхук
-            response_text += (
-                f"💡 Если настроен исходящий вебхук в Bitrix24, связь будет автоматически "
-                f"синхронизирована при обновлении пользователя.\n\n"
-            )
+            if bitrix_success:
+                response_text += f"✅ Связь также синхронизирована с Bitrix24\n\n"
+            else:
+                response_text += (
+                    f"⚠️ Не удалось синхронизировать с Bitrix24 (связь сохранена в БД бота)\n\n"
+                    f"Возможные причины:\n"
+                    f"1. Поле '{bitrix_client.telegram_field_name}' не существует в Bitrix24\n"
+                    f"2. Вебхук не имеет прав на изменение пользователей (user.update)\n"
+                    f"3. Вебхук не имеет прав на изменение пользовательских полей\n\n"
+                )
             
-            response_text += f"Теперь бот будет автоматически определять ваш аккаунт!"
+            response_text += f"💡 Бот будет автоматически определять ваш аккаунт по связи в базе данных!"
             
             await update.message.reply_text(response_text)
         else:
+            # Если не удалось сохранить в БД
             await update.message.reply_text(
-                f"❌ Не удалось сохранить связь в Bitrix24.\n\n"
-                f"Возможные причины:\n"
-                f"1. Поле '{bitrix_client.telegram_field_name}' не существует в Bitrix24\n"
-                f"2. Вебхук не имеет прав на изменение пользователей (user.update)\n"
-                f"3. Вебхук не имеет прав на изменение пользовательских полей\n\n"
-                f"Проверьте права вебхука в Bitrix24:\n"
-                f"Настройки → Разработчикам → Входящий вебхук → Выберите ваш вебхук"
+                f"❌ Не удалось сохранить связь в базе данных.\n\n"
+                f"Проверьте настройки PostgreSQL:\n"
+                f"1. Убедитесь, что переменная DATABASE_URL установлена\n"
+                f"2. Проверьте доступность базы данных\n"
+                f"3. Проверьте логи для деталей ошибки"
             )
     except ValueError:
         await update.message.reply_text("❌ ID пользователя должен быть числом")
@@ -2035,12 +2054,24 @@ def main():
                                     if existing_bitrix_id and existing_bitrix_id != user_id_int:
                                         logger.warning(
                                             f"⚠️ Конфликт связей: Telegram ID {telegram_id} уже связан с "
-                                            f"Bitrix24 User ID {existing_bitrix_id}, но получено {user_id_int}"
+                                            f"Bitrix24 User ID {existing_bitrix_id}, но получено {user_id_int}. Обновляем связь."
                                         )
                                     
-                                    # Обновляем БД и локальное хранилище (кеш)
+                                    # Сохраняем в БД (основной источник истины)
+                                    db_saved = False
                                     if DATABASE_AVAILABLE:
-                                        database.set_telegram_to_bitrix_mapping(telegram_id, user_id_int)
+                                        db_saved = database.set_telegram_to_bitrix_mapping(telegram_id, user_id_int)
+                                        if db_saved:
+                                            logger.info(
+                                                f"✅ Связь сохранена в PostgreSQL из вебхука Bitrix24: "
+                                                f"Telegram ID {telegram_id} → Bitrix24 User ID {user_id_int}"
+                                            )
+                                        else:
+                                            logger.warning(
+                                                f"⚠️ Не удалось сохранить связь в PostgreSQL из вебхука"
+                                            )
+                                    
+                                    # Обновляем локальное хранилище (кеш)
                                     TELEGRAM_TO_BITRIX_MAPPING[telegram_id] = user_id_int
                                     
                                     logger.info(
