@@ -43,16 +43,16 @@ logger = logging.getLogger(__name__)
 
 # Инициализация клиента Битрикс24
 # Название поля для Telegram ID можно настроить через переменную окружения BITRIX24_TELEGRAM_FIELD_NAME
-# По умолчанию используется UF_TELEGRAM (так как пользователь создал поле с названием "Telegram")
+# По умолчанию используется UF_USR_TELEGRAM (поле создается автоматически в Bitrix24)
 bitrix_client = Bitrix24Client(
     domain=os.getenv("BITRIX24_DOMAIN"),
     webhook_token=os.getenv("BITRIX24_WEBHOOK_TOKEN"),
-    telegram_field_name=os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_TELEGRAM")
+    telegram_field_name=os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_USR_TELEGRAM")
 )
 
 # Проверяем и создаем поле для Telegram ID в Bitrix24 при старте
 # Поле создается автоматически через API, если вебхук имеет права user.userfield
-# По умолчанию используется поле UF_TELEGRAM (можно настроить через BITRIX24_TELEGRAM_FIELD_NAME)
+# По умолчанию используется поле UF_USR_TELEGRAM (можно настроить через BITRIX24_TELEGRAM_FIELD_NAME)
 # Поле создается один раз и становится доступным для всех пользователей
 try:
     field_created = bitrix_client.ensure_telegram_id_field()

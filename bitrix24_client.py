@@ -19,7 +19,7 @@ class Bitrix24Client:
         Args:
             domain: Домен Битрикс24 (например, your-domain.bitrix24.ru)
             webhook_token: Токен вебхука для доступа к API
-            telegram_field_name: Название поля для хранения Telegram ID (по умолчанию UF_TELEGRAM)
+            telegram_field_name: Название поля для хранения Telegram ID (по умолчанию UF_USR_TELEGRAM)
         """
         if domain is None:
             raise ValueError("BITRIX24_DOMAIN не установлен в переменных окружения")
@@ -29,8 +29,8 @@ class Bitrix24Client:
         self.domain = domain.rstrip('/')
         self.webhook_token = webhook_token
         self.base_url = f"https://{self.domain}/rest/{webhook_token}"
-        # Название поля для хранения Telegram ID (по умолчанию UF_TELEGRAM, так как пользователь создал поле "Telegram")
-        self.telegram_field_name = telegram_field_name or os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_TELEGRAM")
+        # Название поля для хранения Telegram ID (по умолчанию UF_USR_TELEGRAM, так как поле создается автоматически в Bitrix24)
+        self.telegram_field_name = telegram_field_name or os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_USR_TELEGRAM")
     
     def _make_request(self, method: str, params: Dict = None, use_get: bool = False) -> Dict:
         """
