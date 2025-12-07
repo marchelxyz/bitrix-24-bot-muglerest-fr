@@ -1866,7 +1866,9 @@ def main():
                         # Получаем данные из запроса
                         title = data.get('title', '').strip()
                         creator_id = data.get('creator_id')
+                        # Поддерживаем как старый формат (responsible_id), так и новый (responsible_ids)
                         responsible_id = data.get('responsible_id')
+                        responsible_ids = data.get('responsible_ids', [])
                         deadline = data.get('deadline')
                         description = data.get('description', '').strip()
                         department_id = data.get('department_id')  # Может быть None
@@ -1875,13 +1877,24 @@ def main():
                             return web.json_response({'error': 'Название задачи обязательно'}, status=400)
                         if not creator_id:
                             return web.json_response({'error': 'Постановщик не указан'}, status=400)
-                        if not responsible_id:
+                        
+                        # Определяем список исполнителей
+                        if responsible_ids and isinstance(responsible_ids, list) and len(responsible_ids) > 0:
+                            # Новый формат - массив ID
+                            final_responsible_ids = [int(rid) for rid in responsible_ids if rid]
+                        elif responsible_id:
+                            # Старый формат - один ID (для обратной совместимости)
+                            final_responsible_ids = [int(responsible_id)]
+                        else:
+                            return web.json_response({'error': 'Исполнитель не указан'}, status=400)
+                        
+                        if not final_responsible_ids:
                             return web.json_response({'error': 'Исполнитель не указан'}, status=400)
                         
                         # Создаем задачу
                         result = bitrix_client.create_task(
                             title=title,
-                            responsible_ids=[responsible_id],
+                            responsible_ids=final_responsible_ids,
                             creator_id=creator_id,
                             description=description,
                             deadline=deadline,
@@ -1896,10 +1909,13 @@ def main():
                             task_url = bitrix_client.get_task_url(task_id, creator_id)
                             
                             # Получаем информацию о задаче для сообщения
-                            responsible_info = bitrix_client.get_user_by_id(responsible_id)
-                            responsible_name = ""
-                            if responsible_info:
-                                responsible_name = f"{responsible_info.get('NAME', '')} {responsible_info.get('LAST_NAME', '')}".strip()
+                            responsible_names = []
+                            for rid in final_responsible_ids:
+                                resp_info = bitrix_client.get_user_by_id(rid)
+                                if resp_info:
+                                    name = f"{resp_info.get('NAME', '')} {resp_info.get('LAST_NAME', '')}".strip()
+                                    if name:
+                                        responsible_names.append(name)
                             
                             # Формируем текст сообщения
                             response_text = (
@@ -1907,8 +1923,11 @@ def main():
                                 f"📋 Задача: {title}\n"
                             )
                             
-                            if responsible_name:
-                                response_text += f"👤 Ответственный: {responsible_name}\n"
+                            if responsible_names:
+                                if len(responsible_names) == 1:
+                                    response_text += f"👤 Ответственный: {responsible_names[0]}\n"
+                                else:
+                                    response_text += f"👥 Ответственные ({len(responsible_names)}): {', '.join(responsible_names)}\n"
                             
                             if deadline:
                                 response_text += f"📅 Срок: {deadline}\n"
