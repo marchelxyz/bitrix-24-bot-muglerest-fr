@@ -527,8 +527,7 @@
             <input type="text" id="modalSearch" class="modal-search" placeholder="Поиск по имени или ID...">
             <div class="modal-users-list" id="modalUsersList"></div>
             <div class="modal-buttons">
-                <button class="modal-btn modal-btn-cancel" onclick="closeUserModal()">Отмена</button>
-                <button class="modal-btn modal-btn-apply" onclick="applySelectedUsers()" id="applyBtn">Применить</button>
+                <button class="modal-btn modal-btn-cancel" onclick="closeUserModal()">Закрыть</button>
             </div>
         </div>
     </div>
@@ -850,16 +849,6 @@
             }, 100);
         }
         
-        // Применить выбранных пользователей
-        function applySelectedUsers() {
-            if (currentUserSelectType === 'responsible') {
-                selectedResponsibles = usersList
-                    .filter(u => selectedUsersInModal.has(u.id.toString()))
-                    .map(u => ({ id: u.id, name: u.name }));
-                updateResponsiblesDisplay();
-            }
-            closeUserModal();
-        }
         
         // Закрытие модального окна
         function closeUserModal() {
@@ -917,10 +906,6 @@
                 userItem.onclick = () => toggleUserSelection(user);
                 listContainer.appendChild(userItem);
             });
-            
-            // Обновляем кнопку "Применить"
-            const applyBtn = document.getElementById('applyBtn');
-            applyBtn.disabled = selectedUsersInModal.size === 0;
         }
         
         // Переключение выбора пользователя
@@ -930,6 +915,14 @@
                 selectedUsersInModal.delete(userId);
             } else {
                 selectedUsersInModal.add(userId);
+            }
+            
+            // Сразу применяем изменения
+            if (currentUserSelectType === 'responsible') {
+                selectedResponsibles = usersList
+                    .filter(u => selectedUsersInModal.has(u.id.toString()))
+                    .map(u => ({ id: u.id, name: u.name }));
+                updateResponsiblesDisplay();
             }
             
             // Перерисовываем список
