@@ -80,6 +80,10 @@ USERNAME_TO_BITRIX_MAPPING: Dict[str, int] = {}
 # {"123": 5, "456": 10} где 123 и 456 - thread_id, 5 и 10 - department_id
 THREAD_TO_DEPARTMENT_MAPPING: Dict[int, int] = {}
 
+# Глобальная переменная для сервиса уведомлений о задачах
+# Используется в обработчике исходящего вебхука Bitrix24
+task_notification_service = None
+
 # Инициализация PostgreSQL базы данных
 if DATABASE_AVAILABLE:
     try:
@@ -1800,6 +1804,10 @@ def main():
                                         telegram_group_id=telegram_group_id_int
                                     )
                                     
+                                    # Сохраняем в глобальную переменную для доступа из обработчика вебхука
+                                    global task_notification_service
+                                    task_notification_service = notification_service
+                                    
                                     # Запускаем периодическую проверку задач в фоне
                                     async def periodic_task_check():
                                         """Периодическая проверка задач"""
@@ -2292,12 +2300,15 @@ def main():
                         return web.json_response({'error': 'Внутренняя ошибка сервера'}, status=500)
                 
                 # API: Обработчик исходящего вебхука от Bitrix24
-                # Используется для получения уведомлений об обновлении пользователей
+                # Используется для получения уведомлений об обновлении пользователей и задач
                 # и синхронизации Telegram ID из Bitrix24 в БД
                 async def bitrix_outgoing_webhook_handler(request):
                     """
                     Обработчик исходящего вебхука от Bitrix24
-                    Получает уведомления об обновлении пользователей и синхронизирует Telegram ID
+                    Получает уведомления о событиях в Bitrix24:
+                    - События пользователей: ONUSERUPDATE, ONUSERADD - синхронизация Telegram ID
+                    - События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE - уведомления о задачах
+                    - События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE
                     
                     Формат данных от Bitrix24 может быть разным:
                     - Старый формат: {"event": "ONUSERUPDATE", "data": {"FIELDS": {...}}}
@@ -2420,8 +2431,63 @@ def main():
                                     logger.warning(f"Неверный формат Telegram ID: {telegram_id_str}, ошибка: {e}")
                             else:
                                 logger.debug(f"Пользователь {user_id} обновлен, но Telegram ID не указан в поле {telegram_field_name}")
+                        # Обрабатываем события задач
+                        elif 'TASK' in event.upper():
+                            event_upper = event.upper()
+                            
+                            # События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE
+                            if 'ONTASKADD' in event_upper or 'ONTASKUPDATE' in event_upper or 'ONTASKDELETE' in event_upper:
+                                logger.info(f"📋 Получено событие задачи: {event}")
+                                
+                                # Извлекаем данные задачи
+                                task_data = None
+                                if isinstance(data_obj, dict) and 'FIELDS' in data_obj:
+                                    task_data = data_obj['FIELDS']
+                                elif isinstance(data_obj, dict) and 'ID' in data_obj:
+                                    task_data = data_obj
+                                elif isinstance(data_obj, list) and len(data_obj) > 0:
+                                    task_data = data_obj[0]
+                                
+                                if task_data:
+                                    task_id = task_data.get('ID') or task_data.get('id')
+                                    logger.debug(f"Обработка события задачи {task_id}: {event}")
+                                    
+                                    # Отправляем уведомления о задачах через TaskNotificationService
+                                    if TASK_NOTIFICATIONS_AVAILABLE and task_notification_service:
+                                        try:
+                                            # Для событий задач можно отправить уведомление
+                                            # TODO: Реализовать отправку уведомлений при изменении задач
+                                            logger.debug(f"Сервис уведомлений доступен для задачи {task_id}, событие: {event}")
+                                        except Exception as notif_error:
+                                            logger.debug(f"Ошибка при обработке уведомления о задаче: {notif_error}")
+                            
+                            # События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE
+                            elif 'ONTASKCOMMENT' in event_upper:
+                                logger.info(f"💬 Получено событие комментария к задаче: {event}")
+                                
+                                # Извлекаем данные комментария
+                                comment_data = None
+                                if isinstance(data_obj, dict) and 'FIELDS' in data_obj:
+                                    comment_data = data_obj['FIELDS']
+                                elif isinstance(data_obj, dict):
+                                    comment_data = data_obj
+                                elif isinstance(data_obj, list) and len(data_obj) > 0:
+                                    comment_data = data_obj[0]
+                                
+                                if comment_data:
+                                    task_id = comment_data.get('TASK_ID') or comment_data.get('taskId') or comment_data.get('TASKID')
+                                    comment_id = comment_data.get('ID') or comment_data.get('id')
+                                    logger.debug(f"Обработка события комментария {comment_id} к задаче {task_id}: {event}")
+                                    
+                                    # Отправляем уведомления о комментариях через TaskNotificationService
+                                    if TASK_NOTIFICATIONS_AVAILABLE and task_notification_service:
+                                        try:
+                                            # TODO: Реализовать отправку уведомлений при добавлении комментариев
+                                            logger.debug(f"Сервис уведомлений доступен для комментария {comment_id} к задаче {task_id}, событие: {event}")
+                                        except Exception as notif_error:
+                                            logger.debug(f"Ошибка при обработке уведомления о комментарии: {notif_error}")
                         else:
-                            logger.debug(f"Событие {event} не обрабатывается (не связано с пользователями)")
+                            logger.debug(f"Событие {event} не обрабатывается (не связано с пользователями или задачами)")
                         
                         # Всегда возвращаем успешный ответ, чтобы Bitrix24 не повторял запрос
                         return web.json_response({'status': 'ok'}, status=200)
