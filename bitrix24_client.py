@@ -242,10 +242,65 @@ class Bitrix24Client:
                     else:
                         logger.debug(f"Пропущен невалидный элемент пользователя: {type(user)}, значение: {user}")
                         continue
+                
+                # Логируем всех пользователей с их ID и именами
+                logger.info("=" * 80)
+                logger.info("📋 СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ BITRIX24:")
+                logger.info("=" * 80)
+                for user in valid_users:
+                    user_id = user.get("ID", "N/A")
+                    name = user.get("NAME", "").strip()
+                    last_name = user.get("LAST_NAME", "").strip()
+                    full_name = f"{name} {last_name}".strip()
+                    email = user.get("EMAIL", "").strip()
+                    login = user.get("LOGIN", "").strip()
+                    telegram_id = user.get(self.telegram_field_name, "").strip()
+                    
+                    # Формируем строку для логирования
+                    log_line = f"ID: {user_id}"
+                    if full_name:
+                        log_line += f" | Имя: {full_name}"
+                    if email:
+                        log_line += f" | Email: {email}"
+                    if login:
+                        log_line += f" | Login: {login}"
+                    if telegram_id:
+                        log_line += f" | Telegram ID: {telegram_id}"
+                    
+                    logger.info(log_line)
+                logger.info("=" * 80)
+                logger.info(f"Всего пользователей: {len(valid_users)}")
+                logger.info("=" * 80)
+                
                 return valid_users
             
             # Если результат - словарь с одним пользователем, оборачиваем в список
             if isinstance(users, dict) and users.get("ID"):
+                # Логируем одного пользователя
+                user = users
+                user_id = user.get("ID", "N/A")
+                name = user.get("NAME", "").strip()
+                last_name = user.get("LAST_NAME", "").strip()
+                full_name = f"{name} {last_name}".strip()
+                email = user.get("EMAIL", "").strip()
+                login = user.get("LOGIN", "").strip()
+                telegram_id = user.get(self.telegram_field_name, "").strip()
+                
+                log_line = f"ID: {user_id}"
+                if full_name:
+                    log_line += f" | Имя: {full_name}"
+                if email:
+                    log_line += f" | Email: {email}"
+                if login:
+                    log_line += f" | Login: {login}"
+                if telegram_id:
+                    log_line += f" | Telegram ID: {telegram_id}"
+                
+                logger.info("=" * 80)
+                logger.info("📋 ПОЛЬЗОВАТЕЛЬ BITRIX24:")
+                logger.info(log_line)
+                logger.info("=" * 80)
+                
                 return [users]
             
             return []
@@ -273,9 +328,63 @@ class Bitrix24Client:
                         else:
                             logger.debug(f"Пропущен невалидный элемент пользователя (fallback): {type(user)}")
                             continue
+                    
+                    # Логируем всех пользователей с их ID и именами (fallback)
+                    logger.info("=" * 80)
+                    logger.info("📋 СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ BITRIX24 (fallback):")
+                    logger.info("=" * 80)
+                    for user in valid_users:
+                        user_id = user.get("ID", "N/A")
+                        name = user.get("NAME", "").strip()
+                        last_name = user.get("LAST_NAME", "").strip()
+                        full_name = f"{name} {last_name}".strip()
+                        email = user.get("EMAIL", "").strip()
+                        login = user.get("LOGIN", "").strip()
+                        telegram_id = user.get(self.telegram_field_name, "").strip()
+                        
+                        log_line = f"ID: {user_id}"
+                        if full_name:
+                            log_line += f" | Имя: {full_name}"
+                        if email:
+                            log_line += f" | Email: {email}"
+                        if login:
+                            log_line += f" | Login: {login}"
+                        if telegram_id:
+                            log_line += f" | Telegram ID: {telegram_id}"
+                        
+                        logger.info(log_line)
+                    logger.info("=" * 80)
+                    logger.info(f"Всего пользователей: {len(valid_users)}")
+                    logger.info("=" * 80)
+                    
                     return valid_users
                 
                 if isinstance(users, dict) and users.get("ID"):
+                    # Логируем одного пользователя (fallback)
+                    user = users
+                    user_id = user.get("ID", "N/A")
+                    name = user.get("NAME", "").strip()
+                    last_name = user.get("LAST_NAME", "").strip()
+                    full_name = f"{name} {last_name}".strip()
+                    email = user.get("EMAIL", "").strip()
+                    login = user.get("LOGIN", "").strip()
+                    telegram_id = user.get(self.telegram_field_name, "").strip()
+                    
+                    log_line = f"ID: {user_id}"
+                    if full_name:
+                        log_line += f" | Имя: {full_name}"
+                    if email:
+                        log_line += f" | Email: {email}"
+                    if login:
+                        log_line += f" | Login: {login}"
+                    if telegram_id:
+                        log_line += f" | Telegram ID: {telegram_id}"
+                    
+                    logger.info("=" * 80)
+                    logger.info("📋 ПОЛЬЗОВАТЕЛЬ BITRIX24 (fallback):")
+                    logger.info(log_line)
+                    logger.info("=" * 80)
+                    
                     return [users]
                 
                 return []

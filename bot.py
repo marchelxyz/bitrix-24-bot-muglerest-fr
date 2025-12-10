@@ -96,6 +96,15 @@ if DATABASE_AVAILABLE:
         logger.error(f"Ошибка при синхронизации связей из Bitrix24: {e}", exc_info=True)
         logger.warning("Бот будет работать, но связи нужно будет устанавливать заново")
 
+# Загружаем и логируем всех пользователей Bitrix24 при старте бота
+try:
+    logger.info("Загрузка списка всех пользователей Bitrix24...")
+    all_users = bitrix_client.get_all_users(active_only=True)
+    logger.info(f"✅ Загружено {len(all_users)} пользователей из Bitrix24")
+except Exception as e:
+    logger.error(f"Ошибка при загрузке пользователей Bitrix24 при старте: {e}", exc_info=True)
+    logger.warning("Бот будет работать, но список пользователей не был загружен")
+
 # Состояния диалога
 WAITING_FOR_RESPONSIBLES, WAITING_FOR_DEADLINE, WAITING_FOR_DESCRIPTION, WAITING_FOR_FILES = range(4)
 
