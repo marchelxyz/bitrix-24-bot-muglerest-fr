@@ -447,6 +447,51 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+        
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .file-item-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--tg-theme-text-color, #000000);
+        }
+        
+        .file-item-size {
+            margin-left: 8px;
+            color: var(--tg-theme-hint-color, #999999);
+            font-size: 12px;
+        }
+        
+        .file-item-remove {
+            margin-left: 8px;
+            padding: 4px 8px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .file-item-remove:active {
+            opacity: 0.8;
+        }
     </style>
 </head>
 <body>
@@ -502,6 +547,13 @@
             <div class="form-group">
                 <label>Описание</label>
                 <textarea id="description" placeholder="Дополнительное описание задачи"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>Файлы (опционально)</label>
+                <input type="file" id="fileInput" multiple style="display: none;" accept="*/*">
+                <button type="button" class="btn-change" onclick="document.getElementById('fileInput').click()">Выбрать файлы</button>
+                <div id="fileList" class="file-list" style="margin-top: 8px;"></div>
             </div>
             
             <div class="form-group">
@@ -596,6 +648,7 @@
         let departmentsList = [];
         let selectedResponsibles = [];
         let selectedUsersInModal = new Set();
+        let selectedFiles = [];
         
         // Получаем базовый URL для API запросов
         function getApiUrl(path) {
@@ -986,6 +1039,56 @@
             }
         });
         
+        // Обработка выбора файлов
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            files.forEach(file => {
+                // Проверяем, не добавлен ли уже этот файл
+                if (!selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            renderFileList();
+            // Очищаем input для возможности повторного выбора того же файла
+            e.target.value = '';
+        });
+        
+        // Отображение списка файлов
+        function renderFileList() {
+            const fileListEl = document.getElementById('fileList');
+            fileListEl.innerHTML = '';
+            
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                
+                const fileSize = formatFileSize(file.size);
+                
+                fileItem.innerHTML = `
+                    <span class="file-item-name">${file.name}</span>
+                    <span class="file-item-size">${fileSize}</span>
+                    <button type="button" class="file-item-remove" onclick="removeFile(${index})">✕</button>
+                `;
+                
+                fileListEl.appendChild(fileItem);
+            });
+        }
+        
+        // Удаление файла из списка
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            renderFileList();
+        }
+        
+        // Форматирование размера файла
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+        
         // Обработка отправки формы
         document.getElementById('taskForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -1014,39 +1117,73 @@
                 return;
             }
             
-            const formData = {
-                token: token,
-                title: document.getElementById('taskTitle').value,
-                creator_id: parseInt(document.getElementById('creatorId').value),
-                responsible_ids: responsibleIdsArray,
-                deadline: document.getElementById('deadline').value,
-                description: document.getElementById('description').value,
-                original_message_text: sessionData.original_message_text,
-                department_id: departmentId ? parseInt(departmentId) : null
-            };
-            
             // Форматируем deadline если указан
-            if (formData.deadline) {
-                const date = new Date(formData.deadline);
-                formData.deadline = date.toISOString().slice(0, 19).replace('T', ' ');
+            let deadlineValue = document.getElementById('deadline').value;
+            if (deadlineValue) {
+                const date = new Date(deadlineValue);
+                deadlineValue = date.toISOString().slice(0, 19).replace('T', ' ');
             }
             
             // Объединяем описание с оригинальным сообщением
-            if (formData.original_message_text) {
-                if (formData.description) {
-                    formData.description = formData.original_message_text + '\n\n' + formData.description;
+            let descriptionValue = document.getElementById('description').value;
+            if (sessionData.original_message_text) {
+                if (descriptionValue) {
+                    descriptionValue = sessionData.original_message_text + '\n\n' + descriptionValue;
                 } else {
-                    formData.description = formData.original_message_text;
+                    descriptionValue = sessionData.original_message_text;
                 }
             }
             
             try {
+                // Если есть файлы, используем FormData, иначе JSON
+                let requestBody;
+                let headers = {};
+                
+                if (selectedFiles.length > 0) {
+                    // Используем FormData для отправки файлов
+                    const formData = new FormData();
+                    formData.append('token', token);
+                    formData.append('title', document.getElementById('taskTitle').value);
+                    formData.append('creator_id', document.getElementById('creatorId').value);
+                    formData.append('responsible_ids', JSON.stringify(responsibleIdsArray));
+                    if (deadlineValue) {
+                        formData.append('deadline', deadlineValue);
+                    }
+                    if (descriptionValue) {
+                        formData.append('description', descriptionValue);
+                    }
+                    if (departmentId) {
+                        formData.append('department_id', departmentId);
+                    }
+                    
+                    // Добавляем файлы
+                    selectedFiles.forEach((file, index) => {
+                        formData.append(`file_${index}`, file);
+                    });
+                    formData.append('files_count', selectedFiles.length.toString());
+                    
+                    requestBody = formData;
+                    // Не устанавливаем Content-Type - браузер установит его автоматически с boundary
+                } else {
+                    // Используем JSON если файлов нет
+                    const formData = {
+                        token: token,
+                        title: document.getElementById('taskTitle').value,
+                        creator_id: parseInt(document.getElementById('creatorId').value),
+                        responsible_ids: responsibleIdsArray,
+                        deadline: deadlineValue || null,
+                        description: descriptionValue || '',
+                        department_id: departmentId ? parseInt(departmentId) : null
+                    };
+                    
+                    requestBody = JSON.stringify(formData);
+                    headers['Content-Type'] = 'application/json';
+                }
+                
                 const response = await fetch(getApiUrl('/api/miniapp/create-task'), {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(formData)
+                    headers: headers,
+                    body: requestBody
                 });
                 
                 const result = await response.json();
