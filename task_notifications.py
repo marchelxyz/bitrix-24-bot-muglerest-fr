@@ -173,7 +173,7 @@ class TaskNotificationService:
                 logger.error(f"❌ Ошибка при отправке уведомления в группу {self.telegram_group_id}: {e}", exc_info=True)
             logger.error(f"   Тип ошибки: {type(e).__name__}")
             logger.error(f"   Сообщение: {message}")
-            logger.error(f"   Telegram ID пользователя: {user_telegram_id}")
+            logger.error(f"   Telegram ID пользователей: {user_telegram_ids}")
             if self.telegram_thread_id:
                 logger.error(f"   Thread ID (топик): {self.telegram_thread_id}")
             # Пробуем получить информацию о группе для диагностики
@@ -194,27 +194,87 @@ class TaskNotificationService:
             # Получаем все задачи с просроченным дедлайном
             # Используем фильтр по DEADLINE < текущая дата и STATUS != завершена
             now = datetime.now()
+            
+            # Пробуем разные форматы даты для совместимости с Bitrix24
+            deadline_filter_with_time = now.strftime('%Y-%m-%d %H:%M:%S')
+            deadline_filter_date_only = now.strftime('%Y-%m-%d')
+            
+            logger.info(f"   Текущее время: {now}")
+            logger.info(f"   Фильтр: DEADLINE < {deadline_filter_with_time}, STATUS != 5")
+            
             # Bitrix24 использует формат фильтров через операторы
             # Для просроченных задач: DEADLINE < текущая дата и STATUS не равен 5 (завершена)
+            # Пробуем сначала с полным форматом даты и времени
             tasks = self.bitrix_client.get_tasks(
                 filter_params={
-                    "<DEADLINE": now.strftime('%Y-%m-%d %H:%M:%S'),
+                    "<DEADLINE": deadline_filter_with_time,
                     "!STATUS": "5"  # Исключаем завершенные задачи (статус 5 = завершена)
                 }
             )
+            
+            logger.info(f"   Найдено задач с просроченным дедлайном (фильтр с временем): {len(tasks)}")
+            
+            # Если не найдено задач, пробуем фильтр только по дате (без времени)
+            if len(tasks) == 0:
+                logger.info(f"   Попытка фильтра только по дате: DEADLINE < {deadline_filter_date_only}")
+                tasks = self.bitrix_client.get_tasks(
+                    filter_params={
+                        "<DEADLINE": deadline_filter_date_only,
+                        "!STATUS": "5"
+                    }
+                )
+                logger.info(f"   Найдено задач с просроченным дедлайном (фильтр только по дате): {len(tasks)}")
+            
+            # Если все еще нет задач, получаем все незавершенные задачи и фильтруем в коде
+            if len(tasks) == 0:
+                logger.info("   Получение всех незавершенных задач для фильтрации в коде...")
+                all_tasks = self.bitrix_client.get_tasks(
+                    filter_params={
+                        "!STATUS": "5"
+                    }
+                )
+                logger.info(f"   Получено незавершенных задач: {len(all_tasks)}")
+                
+                # Фильтруем задачи с просроченным дедлайном в коде
+                tasks = []
+                for task in all_tasks:
+                    deadline_str = task.get("deadline")
+                    if deadline_str:
+                        try:
+                            # Парсим дату дедлайна
+                            if 'T' in deadline_str or 'Z' in deadline_str:
+                                deadline_dt = datetime.fromisoformat(deadline_str.replace('Z', '+00:00'))
+                                if deadline_dt.tzinfo:
+                                    deadline_dt = deadline_dt.replace(tzinfo=None)
+                            else:
+                                deadline_dt = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M:%S')
+                            
+                            # Проверяем, просрочена ли задача
+                            if deadline_dt < now:
+                                tasks.append(task)
+                        except Exception as date_error:
+                            logger.debug(f"   Ошибка при парсинге даты дедлайна задачи {task.get('id')}: {date_error}")
+                
+                logger.info(f"   Найдено просроченных задач после фильтрации в коде: {len(tasks)}")
             
             for task in tasks:
                 task_id = task.get("id")
                 deadline_str = task.get("deadline")
                 responsible_id = task.get("responsibleId")
                 
+                logger.debug(f"   Обработка задачи {task_id}: дедлайн={deadline_str}, ответственный={responsible_id}")
+                
                 if not task_id or not deadline_str:
+                    logger.debug(f"   Пропуск задачи {task_id}: отсутствует ID или дедлайн")
                     continue
                 
                 # Проверяем, не отправляли ли уже уведомление
                 notification_key = self._get_notification_key(task_id, "overdue")
                 if self._was_notification_sent(notification_key):
+                    logger.debug(f"   Пропуск задачи {task_id}: уведомление уже отправлено")
                     continue
+                
+                logger.info(f"   Обработка просроченной задачи {task_id}: {task.get('title', 'Без названия')}")
                 
                 # Получаем полную информацию о задаче для получения создателя
                 try:
@@ -229,6 +289,8 @@ class TaskNotificationService:
                 responsible_telegram_id = None
                 created_by_telegram_id = None
                 
+                logger.debug(f"   Поиск Telegram ID: создатель={created_by_id}, ответственный={responsible_id}")
+                
                 # Сначала получаем создателя (если он есть и отличается от ответственного)
                 if created_by_id and str(created_by_id) != str(responsible_id):
                     try:
@@ -237,13 +299,18 @@ class TaskNotificationService:
                             if created_by_telegram_id:
                                 telegram_ids.append(created_by_telegram_id)
                                 logger.info(f"✅ Найден зарегистрированный пользователь (создатель): {created_by_telegram_id}")
+                            else:
+                                logger.debug(f"   Создатель {created_by_id} не зарегистрирован в системе")
                         else:
                             # Fallback: пробуем через Bitrix24Client
                             created_by_telegram_id = self.bitrix_client.get_user_telegram_id(int(created_by_id))
                             if created_by_telegram_id:
                                 telegram_ids.append(created_by_telegram_id)
+                                logger.info(f"✅ Найден Telegram ID создателя через Bitrix24Client: {created_by_telegram_id}")
+                            else:
+                                logger.debug(f"   Telegram ID создателя {created_by_id} не найден через Bitrix24Client")
                     except Exception as e:
-                        logger.debug(f"Не удалось найти Telegram ID для создателя {created_by_id}: {e}")
+                        logger.warning(f"⚠️ Ошибка при поиске Telegram ID для создателя {created_by_id}: {e}")
                 
                 # Затем получаем ответственного
                 if responsible_id:
@@ -253,13 +320,22 @@ class TaskNotificationService:
                             if responsible_telegram_id and responsible_telegram_id not in telegram_ids:
                                 telegram_ids.append(responsible_telegram_id)
                                 logger.info(f"✅ Найден зарегистрированный пользователь (ответственный): {responsible_telegram_id}")
+                            elif responsible_telegram_id:
+                                logger.debug(f"   Ответственный {responsible_id} уже в списке уведомлений")
+                            else:
+                                logger.debug(f"   Ответственный {responsible_id} не зарегистрирован в системе")
                         else:
                             # Fallback: пробуем через Bitrix24Client
                             responsible_telegram_id = self.bitrix_client.get_user_telegram_id(int(responsible_id))
                             if responsible_telegram_id and responsible_telegram_id not in telegram_ids:
                                 telegram_ids.append(responsible_telegram_id)
+                                logger.info(f"✅ Найден Telegram ID ответственного через Bitrix24Client: {responsible_telegram_id}")
+                            elif responsible_telegram_id:
+                                logger.debug(f"   Ответственный {responsible_id} уже в списке уведомлений")
+                            else:
+                                logger.debug(f"   Telegram ID ответственного {responsible_id} не найден через Bitrix24Client")
                     except Exception as e:
-                        logger.debug(f"Не удалось найти Telegram ID для ответственного {responsible_id}: {e}")
+                        logger.warning(f"⚠️ Ошибка при поиске Telegram ID для ответственного {responsible_id}: {e}")
                 
                 # Отправляем уведомление ТОЛЬКО если есть зарегистрированные пользователи
                 if not telegram_ids:
