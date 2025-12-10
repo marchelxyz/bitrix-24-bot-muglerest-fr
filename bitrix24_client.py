@@ -1790,21 +1790,45 @@ class Bitrix24Client:
             Информация о задаче или None
         """
         try:
-            result = self._make_request("tasks.task.get", {"taskId": task_id})
+            # Пробуем разные варианты параметров для совместимости с разными версиями Bitrix24
+            result = None
             
-            if result.get("result") and result["result"].get("task"):
-                task_data = result["result"]["task"]
-                return {
-                    "id": task_id,
-                    "title": task_data.get("TITLE", ""),
-                    "description": task_data.get("DESCRIPTION", ""),
-                    "deadline": task_data.get("DEADLINE"),
-                    "status": task_data.get("STATUS"),
-                    "responsibleId": task_data.get("RESPONSIBLE_ID"),
-                    "createdBy": task_data.get("CREATED_BY"),
-                    "createdDate": task_data.get("CREATED_DATE"),
-                    "changedDate": task_data.get("CHANGED_DATE")
-                }
+            # Вариант 1: с параметром "id"
+            try:
+                result = self._make_request("tasks.task.get", {"id": task_id})
+            except Exception as e1:
+                # Вариант 2: с параметром "taskId"
+                try:
+                    result = self._make_request("tasks.task.get", {"taskId": task_id})
+                except Exception as e2:
+                    # Вариант 3: с параметром "TASKID"
+                    try:
+                        result = self._make_request("tasks.task.get", {"TASKID": task_id})
+                    except Exception as e3:
+                        # Fallback: используем tasks.task.list с фильтром по ID
+                        logger.debug(f"Метод tasks.task.get недоступен, используем tasks.task.list для задачи {task_id}")
+                        try:
+                            list_result = self.get_tasks(filter_params={"ID": task_id})
+                            if list_result:
+                                # Возвращаем первую найденную задачу
+                                return list_result[0] if isinstance(list_result, list) and len(list_result) > 0 else None
+                        except Exception as e4:
+                            logger.warning(f"Все варианты получения задачи {task_id} не сработали: {e4}")
+            
+            if result and result.get("result"):
+                task_data = result["result"].get("task")
+                if task_data:
+                    return {
+                        "id": task_id,
+                        "title": task_data.get("TITLE", ""),
+                        "description": task_data.get("DESCRIPTION", ""),
+                        "deadline": task_data.get("DEADLINE"),
+                        "status": task_data.get("STATUS"),
+                        "responsibleId": task_data.get("RESPONSIBLE_ID"),
+                        "createdBy": task_data.get("CREATED_BY"),
+                        "createdDate": task_data.get("CREATED_DATE"),
+                        "changedDate": task_data.get("CHANGED_DATE")
+                    }
             
             return None
         except Exception as e:
@@ -1823,22 +1847,44 @@ class Bitrix24Client:
             Информация о комментарии или None
         """
         try:
-            result = self._make_request("tasks.task.comment.get", {
-                "TASKID": task_id,
-                "COMMENTID": comment_id
-            })
+            # Пробуем разные варианты параметров для совместимости с разными версиями Bitrix24
+            result = None
             
-            if result.get("result") and result["result"].get("comment"):
-                comment_data = result["result"]["comment"]
-                return {
-                    "id": comment_id,
+            # Вариант 1: camelCase параметры
+            try:
+                result = self._make_request("tasks.task.comment.get", {
                     "taskId": task_id,
-                    "authorId": comment_data.get("AUTHOR_ID"),
-                    "postMessage": comment_data.get("POST_MESSAGE"),
-                    "createdDate": comment_data.get("CREATED_DATE"),
-                    "updatedDate": comment_data.get("UPDATED_DATE"),
-                    "files": comment_data.get("FILES", [])
-                }
+                    "commentId": comment_id
+                })
+            except Exception as e1:
+                # Вариант 2: UPPERCASE параметры
+                try:
+                    result = self._make_request("tasks.task.comment.get", {
+                        "TASKID": task_id,
+                        "COMMENTID": comment_id
+                    })
+                except Exception as e2:
+                    # Вариант 3: смешанный формат
+                    try:
+                        result = self._make_request("tasks.task.comment.get", {
+                            "TASKID": task_id,
+                            "commentId": comment_id
+                        })
+                    except Exception as e3:
+                        logger.warning(f"Все варианты вызова tasks.task.comment.get не сработали для комментария {comment_id} к задаче {task_id}")
+            
+            if result and result.get("result"):
+                comment_data = result["result"].get("comment")
+                if comment_data:
+                    return {
+                        "id": comment_id,
+                        "taskId": task_id,
+                        "authorId": comment_data.get("AUTHOR_ID"),
+                        "postMessage": comment_data.get("POST_MESSAGE"),
+                        "createdDate": comment_data.get("CREATED_DATE"),
+                        "updatedDate": comment_data.get("UPDATED_DATE"),
+                        "files": comment_data.get("FILES", [])
+                    }
             
             return None
         except Exception as e:
