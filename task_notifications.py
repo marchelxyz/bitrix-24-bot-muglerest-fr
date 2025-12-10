@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class TaskNotificationService:
     """Сервис для отслеживания задач и отправки уведомлений"""
     
-    def __init__(self, bitrix_client: Bitrix24Client, telegram_bot, telegram_group_id: int):
+    def __init__(self, bitrix_client: Bitrix24Client, telegram_bot, telegram_group_id: int, telegram_thread_id: Optional[int] = None):
         """
         Инициализация сервиса уведомлений
         
@@ -27,10 +27,17 @@ class TaskNotificationService:
             bitrix_client: Клиент для работы с Bitrix24 API
             telegram_bot: Экземпляр Telegram бота для отправки сообщений
             telegram_group_id: ID Telegram супергруппы для отправки уведомлений
+            telegram_thread_id: ID топика (thread) в группе для отправки уведомлений (опционально)
         """
         self.bitrix_client = bitrix_client
         self.telegram_bot = telegram_bot
         self.telegram_group_id = telegram_group_id
+        self.telegram_thread_id = telegram_thread_id
+        
+        if telegram_thread_id:
+            logger.info(f"✅ TaskNotificationService инициализирован для группы {telegram_group_id}, топик {telegram_thread_id}")
+        else:
+            logger.info(f"✅ TaskNotificationService инициализирован для группы {telegram_group_id}")
         
         # Настройки уведомлений из переменных окружения
         self.check_interval_minutes = int(os.getenv("TASK_NOTIFICATION_CHECK_INTERVAL", "60"))  # По умолчанию каждый час
@@ -80,12 +87,20 @@ class TaskNotificationService:
             user_telegram_id: Telegram ID пользователя для упоминания (опционально)
         """
         try:
+            if self.telegram_thread_id:
+                logger.info(f"📨 Подготовка уведомления для группы {self.telegram_group_id}, топик {self.telegram_thread_id}")
+            else:
+                logger.info(f"📨 Подготовка уведомления для группы {self.telegram_group_id}")
+            logger.debug(f"Сообщение: {message}")
+            logger.debug(f"Telegram ID пользователя для упоминания: {user_telegram_id}")
+            
             # Формируем текст с упоминанием пользователя, если указан
             # В Telegram супергруппах упоминание делается через user_id
             if user_telegram_id:
                 # Пробуем получить информацию о пользователе из чата для упоминания
                 try:
                     # Получаем информацию о пользователе из чата
+                    logger.debug(f"Получение информации о пользователе {user_telegram_id} из группы {self.telegram_group_id}...")
                     chat_member = await self.telegram_bot.get_chat_member(
                         chat_id=self.telegram_group_id,
                         user_id=user_telegram_id
@@ -93,6 +108,7 @@ class TaskNotificationService:
                     user_name = chat_member.user.first_name or chat_member.user.username or f"Пользователь {user_telegram_id}"
                     # Используем HTML формат для упоминания: <a href="tg://user?id=USER_ID">имя</a>
                     full_message = f"<a href='tg://user?id={user_telegram_id}'>{user_name}</a>, {message}"
+                    logger.debug(f"Сформировано сообщение с упоминанием пользователя: {user_name}")
                 except Exception as member_error:
                     # Если не удалось получить информацию о пользователе, используем простой формат
                     logger.debug(f"Не удалось получить информацию о пользователе {user_telegram_id}: {member_error}")
@@ -101,15 +117,45 @@ class TaskNotificationService:
             else:
                 full_message = message
             
-            await self.telegram_bot.send_message(
-                chat_id=self.telegram_group_id,
-                text=full_message,
-                parse_mode='HTML',
-                disable_web_page_preview=False
-            )
-            logger.info(f"✅ Уведомление отправлено в группу {self.telegram_group_id}")
+            logger.info(f"📤 Отправка сообщения в группу {self.telegram_group_id}...")
+            if self.telegram_thread_id:
+                logger.info(f"   Топик (thread_id): {self.telegram_thread_id}")
+            logger.debug(f"Текст сообщения: {full_message}")
+            
+            # Формируем параметры для отправки сообщения
+            send_params = {
+                'chat_id': self.telegram_group_id,
+                'text': full_message,
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': False
+            }
+            
+            # Если указан thread_id, добавляем его для отправки в топик форума
+            if self.telegram_thread_id:
+                send_params['message_thread_id'] = self.telegram_thread_id
+            
+            result = await self.telegram_bot.send_message(**send_params)
+            
+            if self.telegram_thread_id:
+                logger.info(f"✅ Уведомление успешно отправлено в группу {self.telegram_group_id}, топик {self.telegram_thread_id} (message_id: {result.message_id})")
+            else:
+                logger.info(f"✅ Уведомление успешно отправлено в группу {self.telegram_group_id} (message_id: {result.message_id})")
         except Exception as e:
-            logger.error(f"❌ Ошибка при отправке уведомления: {e}", exc_info=True)
+            if self.telegram_thread_id:
+                logger.error(f"❌ Ошибка при отправке уведомления в группу {self.telegram_group_id}, топик {self.telegram_thread_id}: {e}", exc_info=True)
+            else:
+                logger.error(f"❌ Ошибка при отправке уведомления в группу {self.telegram_group_id}: {e}", exc_info=True)
+            logger.error(f"   Тип ошибки: {type(e).__name__}")
+            logger.error(f"   Сообщение: {message}")
+            logger.error(f"   Telegram ID пользователя: {user_telegram_id}")
+            if self.telegram_thread_id:
+                logger.error(f"   Thread ID (топик): {self.telegram_thread_id}")
+            # Пробуем получить информацию о группе для диагностики
+            try:
+                chat_info = await self.telegram_bot.get_chat(chat_id=self.telegram_group_id)
+                logger.error(f"   Информация о группе: {chat_info.title} (тип: {chat_info.type})")
+            except Exception as chat_error:
+                logger.error(f"   Не удалось получить информацию о группе: {chat_error}")
     
     async def check_overdue_tasks(self):
         """Проверка просроченных задач"""
@@ -271,6 +317,169 @@ class TaskNotificationService:
         logger.info("   События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE")
         logger.info("   События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE")
         return
+    
+    async def handle_task_event(self, event: str, task_data: Dict):
+        """
+        Обработка события задачи из вебхука Bitrix24
+        
+        Args:
+            event: Тип события (ONTASKADD, ONTASKUPDATE, ONTASKDELETE)
+            task_data: Данные задачи из вебхука
+        """
+        try:
+            task_id = task_data.get('ID') or task_data.get('id')
+            if not task_id:
+                logger.warning(f"Не удалось получить ID задачи из данных: {task_data}")
+                return
+            
+            task_id_int = int(task_id)
+            event_upper = event.upper()
+            
+            # Получаем информацию о задаче
+            task_title = task_data.get('TITLE') or task_data.get('title') or 'Без названия'
+            responsible_id = task_data.get('RESPONSIBLE_ID') or task_data.get('responsibleId') or task_data.get('RESPONSIBLE_ID')
+            status = task_data.get('STATUS') or task_data.get('status')
+            deadline = task_data.get('DEADLINE') or task_data.get('deadline')
+            
+            # Получаем Telegram ID ответственного
+            telegram_id = None
+            if responsible_id:
+                try:
+                    telegram_id = self.bitrix_client.get_user_telegram_id(int(responsible_id))
+                except Exception as e:
+                    logger.debug(f"Не удалось получить Telegram ID для пользователя {responsible_id}: {e}")
+            
+            # Формируем ссылку на задачу
+            task_url = self.bitrix_client.get_task_url(task_id_int, int(responsible_id) if responsible_id else None)
+            
+            # Формируем сообщение в зависимости от типа события
+            if 'ONTASKADD' in event_upper:
+                message = f"создана новая задача <a href='{task_url}'>«{task_title}»</a>"
+                notification_type = "task_added"
+            elif 'ONTASKUPDATE' in event_upper:
+                # Определяем, что именно изменилось
+                status_name = self._get_status_name(status) if status else None
+                if status_name:
+                    message = f"задача <a href='{task_url}'>«{task_title}»</a> изменена: статус — {status_name}"
+                else:
+                    message = f"задача <a href='{task_url}'>«{task_title}»</a> обновлена"
+                notification_type = "task_updated"
+            elif 'ONTASKDELETE' in event_upper:
+                message = f"задача «{task_title}» удалена"
+                notification_type = "task_deleted"
+            else:
+                logger.debug(f"Неизвестный тип события задачи: {event}")
+                return
+            
+            # Проверяем, не отправляли ли уже уведомление для этого события
+            notification_key = self._get_notification_key(task_id_int, notification_type, event_upper)
+            if self._was_notification_sent(notification_key):
+                logger.debug(f"Уведомление для события {event} задачи {task_id_int} уже отправлено")
+                return
+            
+            # Отправляем уведомление в группу
+            await self._send_notification(message, telegram_id)
+            
+            # Отмечаем уведомление как отправленное
+            self._mark_notification_sent(notification_key, task_id_int, notification_type, event_upper)
+            
+            logger.info(f"✅ Отправлено уведомление о событии {event} для задачи {task_id_int}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке события задачи {event}: {e}", exc_info=True)
+    
+    async def handle_task_comment_event(self, event: str, comment_data: Dict):
+        """
+        Обработка события комментария к задаче из вебхука Bitrix24
+        
+        Args:
+            event: Тип события (ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE)
+            comment_data: Данные комментария из вебхука
+        """
+        try:
+            task_id = comment_data.get('TASK_ID') or comment_data.get('taskId') or comment_data.get('TASKID')
+            comment_id = comment_data.get('ID') or comment_data.get('id')
+            
+            if not task_id:
+                logger.warning(f"Не удалось получить ID задачи из данных комментария: {comment_data}")
+                return
+            
+            task_id_int = int(task_id)
+            event_upper = event.upper()
+            
+            # Получаем информацию о задаче для формирования ссылки
+            try:
+                task_info = self.bitrix_client.get_task_by_id(task_id_int)
+                task_title = task_info.get('title', 'Без названия') if task_info else 'Без названия'
+                responsible_id = task_info.get('responsibleId') if task_info else None
+            except Exception as e:
+                logger.debug(f"Не удалось получить информацию о задаче {task_id_int}: {e}")
+                task_title = 'Без названия'
+                responsible_id = None
+            
+            # Формируем ссылку на задачу
+            task_url = self.bitrix_client.get_task_url(task_id_int, int(responsible_id) if responsible_id else None)
+            
+            # Получаем автора комментария
+            author_id = comment_data.get('AUTHOR_ID') or comment_data.get('authorId') or comment_data.get('AUTHOR_ID')
+            telegram_id = None
+            if author_id:
+                try:
+                    telegram_id = self.bitrix_client.get_user_telegram_id(int(author_id))
+                except Exception as e:
+                    logger.debug(f"Не удалось получить Telegram ID для автора комментария {author_id}: {e}")
+            
+            # Формируем сообщение в зависимости от типа события
+            if 'ONTASKCOMMENTADD' in event_upper:
+                message = f"добавлен комментарий к задаче <a href='{task_url}'>«{task_title}»</a>"
+                notification_type = "comment_added"
+            elif 'ONTASKCOMMENTUPDATE' in event_upper:
+                message = f"обновлен комментарий к задаче <a href='{task_url}'>«{task_title}»</a>"
+                notification_type = "comment_updated"
+            elif 'ONTASKCOMMENTDELETE' in event_upper:
+                message = f"удален комментарий к задаче <a href='{task_url}'>«{task_title}»</a>"
+                notification_type = "comment_deleted"
+            else:
+                logger.debug(f"Неизвестный тип события комментария: {event}")
+                return
+            
+            # Проверяем, не отправляли ли уже уведомление для этого события
+            notification_key = self._get_notification_key(task_id_int, notification_type, str(comment_id))
+            if self._was_notification_sent(notification_key):
+                logger.debug(f"Уведомление для события {event} комментария {comment_id} уже отправлено")
+                return
+            
+            # Отправляем уведомление в группу
+            await self._send_notification(message, telegram_id)
+            
+            # Отмечаем уведомление как отправленное
+            self._mark_notification_sent(notification_key, task_id_int, notification_type, str(comment_id))
+            
+            logger.info(f"✅ Отправлено уведомление о событии {event} для комментария {comment_id} к задаче {task_id_int}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке события комментария {event}: {e}", exc_info=True)
+    
+    def _get_status_name(self, status: str) -> str:
+        """
+        Получение названия статуса задачи
+        
+        Args:
+            status: Код статуса задачи в Bitrix24
+            
+        Returns:
+            Название статуса
+        """
+        status_map = {
+            '1': 'Новая',
+            '2': 'В работе',
+            '3': 'Ожидает выполнения',
+            '4': 'Требует внимания',
+            '5': 'Завершена',
+            '6': 'Отложена',
+            '7': 'Отклонена'
+        }
+        return status_map.get(str(status), f'Статус {status}')
     
     async def run_periodic_check(self):
         """Запуск периодической проверки задач"""
