@@ -126,25 +126,102 @@ class Bitrix24Client:
         result = self._make_request("tasks.task.add", task_data)
         return result
     
-    def upload_file(self, file_content: bytes, filename: str) -> Optional[int]:
+    def upload_file(self, file_content: bytes, filename: str, folder_id: str = "shared_files") -> Optional[int]:
         """
         Загрузка файла в Битрикс24
         
         Args:
             file_content: Содержимое файла в байтах
             filename: Имя файла
+            folder_id: ID папки для загрузки (по умолчанию "shared_files" - общие файлы)
             
         Returns:
             ID загруженного файла или None
         """
         try:
-            # Загрузка файла через disk.file.upload
-            # Сначала нужно получить временный URL для загрузки
-            result = self._make_request("disk.folder.getchildren", {"id": "shared_files"})
-            # Упрощенная версия - в реальности нужна более сложная логика
-            # Для начала возвращаем None, файлы можно прикрепить позже через веб-интерфейс
+            import base64
+            
+            # Кодируем файл в base64 для передачи через REST API
+            file_base64 = base64.b64encode(file_content).decode('utf-8')
+            
+            # В Bitrix24 REST API для загрузки файлов используется disk.file.upload
+            # Формат: {"id": "folder_id", "data": {"NAME": "filename", "fileContent": "base64_content"}}
+            upload_data = {
+                "id": folder_id,
+                "data": {
+                    "NAME": filename,
+                    "fileContent": file_base64
+                }
+            }
+            
+            result = self._make_request("disk.file.upload", upload_data)
+            
+            # Проверяем результат
+            if result.get("result"):
+                file_data = result["result"]
+                # Может быть словарь с ID или просто ID
+                file_id = None
+                if isinstance(file_data, dict):
+                    file_id = file_data.get("ID") or file_data.get("id")
+                elif isinstance(file_data, (int, str)):
+                    file_id = file_data
+                
+                if file_id:
+                    logger.info(f"✅ Файл {filename} успешно загружен в Bitrix24 (ID: {file_id})")
+                    return int(file_id)
+                else:
+                    logger.warning(f"⚠️ Файл загружен, но ID не получен. Результат: {result}")
+                    # Пробуем альтернативный способ - через disk.folder.uploadfile
+                    return self._upload_file_alternative(file_content, filename, folder_id)
+            else:
+                error = result.get("error", "Неизвестная ошибка")
+                error_description = result.get("error_description", "")
+                logger.warning(f"⚠️ Ошибка при загрузке файла через disk.file.upload: {error} - {error_description}")
+                # Пробуем альтернативный способ
+                return self._upload_file_alternative(file_content, filename, folder_id)
+                
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке файла {filename} в Bitrix24: {e}", exc_info=True)
+            # Пробуем альтернативный способ
+            return self._upload_file_alternative(file_content, filename, folder_id)
+    
+    def _upload_file_alternative(self, file_content: bytes, filename: str, folder_id: str) -> Optional[int]:
+        """
+        Альтернативный способ загрузки файла через disk.folder.uploadfile
+        """
+        try:
+            import base64
+            
+            file_base64 = base64.b64encode(file_content).decode('utf-8')
+            
+            # Альтернативный метод - disk.folder.uploadfile
+            upload_data = {
+                "id": folder_id,
+                "data": {
+                    "NAME": filename
+                },
+                "fileContent": file_base64
+            }
+            
+            result = self._make_request("disk.folder.uploadfile", upload_data)
+            
+            if result.get("result"):
+                file_data = result["result"]
+                file_id = None
+                if isinstance(file_data, dict):
+                    file_id = file_data.get("ID") or file_data.get("id")
+                elif isinstance(file_data, (int, str)):
+                    file_id = file_data
+                
+                if file_id:
+                    logger.info(f"✅ Файл {filename} успешно загружен через альтернативный метод (ID: {file_id})")
+                    return int(file_id)
+            
+            logger.warning(f"⚠️ Альтернативный метод загрузки также не сработал для файла {filename}")
             return None
-        except Exception:
+            
+        except Exception as e:
+            logger.error(f"Ошибка при альтернативной загрузке файла {filename}: {e}", exc_info=True)
             return None
     
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:

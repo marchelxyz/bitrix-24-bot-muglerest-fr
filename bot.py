@@ -3,6 +3,7 @@ Telegram бот для создания задач в Битрикс24 чере�
 """
 import os
 import re
+import json
 import logging
 import threading
 import asyncio
@@ -1880,8 +1881,52 @@ def main():
                 # API: Создание задачи из Mini App
                 async def miniapp_create_task_handler(request):
                     try:
-                        data = await request.json()
-                        token = data.get('token')
+                        # Проверяем тип контента для определения формата данных
+                        content_type = request.headers.get('Content-Type', '')
+                        is_multipart = 'multipart/form-data' in content_type
+                        
+                        if is_multipart:
+                            # Обрабатываем multipart/form-data (с файлами)
+                            data = await request.post()
+                            
+                            # Получаем файлы
+                            files = []
+                            files_count = int(data.get('files_count', 0))
+                            for i in range(files_count):
+                                file_field = data.get(f'file_{i}')
+                                if file_field and hasattr(file_field, 'file'):
+                                    # aiohttp возвращает FileField объект
+                                    file_content = file_field.file.read()
+                                    filename = file_field.filename
+                                    files.append((filename, file_content))
+                            
+                            # Получаем остальные данные
+                            token = data.get('token')
+                            title = data.get('title', '').strip()
+                            creator_id = int(data.get('creator_id')) if data.get('creator_id') else None
+                            responsible_ids_str = data.get('responsible_ids', '[]')
+                            deadline = data.get('deadline')
+                            description = data.get('description', '').strip()
+                            department_id = int(data.get('department_id')) if data.get('department_id') else None
+                            
+                            # Парсим responsible_ids из JSON строки
+                            try:
+                                responsible_ids = json.loads(responsible_ids_str) if isinstance(responsible_ids_str, str) else responsible_ids_str
+                            except:
+                                responsible_ids = []
+                        else:
+                            # Обрабатываем JSON (без файлов)
+                            data = await request.json()
+                            files = []
+                            
+                            token = data.get('token')
+                            title = data.get('title', '').strip()
+                            creator_id = data.get('creator_id')
+                            responsible_id = data.get('responsible_id')
+                            responsible_ids = data.get('responsible_ids', [])
+                            deadline = data.get('deadline')
+                            description = data.get('description', '').strip()
+                            department_id = data.get('department_id')
                         
                         if not token:
                             return web.json_response({'error': 'Токен не указан'}, status=400)
@@ -1892,33 +1937,42 @@ def main():
                         if not session_data:
                             return web.json_response({'error': 'Сессия не найдена или истекла'}, status=404)
                         
-                        # Получаем данные из запроса
-                        title = data.get('title', '').strip()
-                        creator_id = data.get('creator_id')
-                        # Поддерживаем как старый формат (responsible_id), так и новый (responsible_ids)
-                        responsible_id = data.get('responsible_id')
-                        responsible_ids = data.get('responsible_ids', [])
-                        deadline = data.get('deadline')
-                        description = data.get('description', '').strip()
-                        department_id = data.get('department_id')  # Может быть None
-                        
                         if not title:
                             return web.json_response({'error': 'Название задачи обязательно'}, status=400)
                         if not creator_id:
                             return web.json_response({'error': 'Постановщик не указан'}, status=400)
                         
                         # Определяем список исполнителей
-                        if responsible_ids and isinstance(responsible_ids, list) and len(responsible_ids) > 0:
-                            # Новый формат - массив ID
-                            final_responsible_ids = [int(rid) for rid in responsible_ids if rid]
-                        elif responsible_id:
-                            # Старый формат - один ID (для обратной совместимости)
-                            final_responsible_ids = [int(responsible_id)]
+                        if not is_multipart:
+                            # Для JSON формата поддерживаем старый формат
+                            if responsible_ids and isinstance(responsible_ids, list) and len(responsible_ids) > 0:
+                                final_responsible_ids = [int(rid) for rid in responsible_ids if rid]
+                            elif responsible_id:
+                                final_responsible_ids = [int(responsible_id)]
+                            else:
+                                return web.json_response({'error': 'Исполнитель не указан'}, status=400)
                         else:
-                            return web.json_response({'error': 'Исполнитель не указан'}, status=400)
+                            # Для multipart формата responsible_ids уже распарсены
+                            final_responsible_ids = [int(rid) for rid in responsible_ids if rid] if responsible_ids else []
                         
                         if not final_responsible_ids:
                             return web.json_response({'error': 'Исполнитель не указан'}, status=400)
+                        
+                        # Загружаем файлы в Bitrix24, если они есть
+                        file_ids = None
+                        if files:
+                            logger.info(f"Загрузка {len(files)} файлов в Bitrix24...")
+                            uploaded_file_ids = []
+                            for filename, file_content in files:
+                                file_id = bitrix_client.upload_file(file_content, filename)
+                                if file_id:
+                                    uploaded_file_ids.append(file_id)
+                                else:
+                                    logger.warning(f"Не удалось загрузить файл {filename} в Bitrix24")
+                            
+                            if uploaded_file_ids:
+                                file_ids = uploaded_file_ids
+                                logger.info(f"✅ Успешно загружено {len(uploaded_file_ids)} файлов в Bitrix24")
                         
                         # Создаем задачу
                         result = bitrix_client.create_task(
@@ -1927,7 +1981,7 @@ def main():
                             creator_id=creator_id,
                             description=description,
                             deadline=deadline,
-                            file_ids=None,
+                            file_ids=file_ids,
                             department_id=department_id
                         )
                         
@@ -1963,6 +2017,9 @@ def main():
                             
                             if description:
                                 response_text += f"📝 Описание: {description[:100]}...\n" if len(description) > 100 else f"📝 Описание: {description}\n"
+                            
+                            if file_ids:
+                                response_text += f"📎 Прикреплено файлов: {len(file_ids)}\n"
                             
                             response_text += f"🆔 ID задачи: {task_id}\n\n"
                             response_text += f"🔗 Ссылка на задачу: {task_url}"
