@@ -32,7 +32,7 @@ class Bitrix24Client:
         # Название поля для хранения Telegram ID (по умолчанию UF_USR_TELEGRAM, так как поле создается автоматически в Bitrix24)
         self.telegram_field_name = telegram_field_name or os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_USR_TELEGRAM")
     
-    def _make_request(self, method: str, params: Dict = None, use_get: bool = False) -> Dict:
+    def _make_request(self, method: str, params: Dict = None, use_get: bool = False, files: Dict = None) -> Dict:
         """
         Выполнение запроса к API Битрикс24
         
@@ -40,6 +40,7 @@ class Bitrix24Client:
             method: Метод API (например, tasks.task.add)
             params: Параметры запроса
             use_get: Если True, использует GET запрос вместо POST
+            files: Словарь файлов для multipart/form-data запроса
             
         Returns:
             Ответ от API
@@ -52,6 +53,9 @@ class Bitrix24Client:
         if use_get:
             # Для GET запросов параметры передаются в URL
             response = requests.get(url, params=params)
+        elif files:
+            # Для POST запросов с файлами используем multipart/form-data
+            response = requests.post(url, data=params, files=files)
         else:
             # Для POST запросов параметры передаются в JSON body
             response = requests.post(url, json=params)
@@ -67,7 +71,8 @@ class Bitrix24Client:
         description: str = "",
         deadline: str = None,
         file_ids: List[int] = None,
-        department_id: int = None
+        department_id: int = None,
+        files: List[tuple] = None
     ) -> Dict:
         """
         Создание задачи в Битрикс24
@@ -78,8 +83,9 @@ class Bitrix24Client:
             creator_id: ID создателя задачи
             description: Описание задачи
             deadline: Дедлайн задачи (формат: YYYY-MM-DD HH:MI:SS)
-            file_ids: Список ID прикрепленных файлов
+            file_ids: Список ID прикрепленных файлов (если файлы уже загружены на диск)
             department_id: ID подразделения (опционально)
+            files: Список кортежей (filename, file_content) для прямого прикрепления файлов к задаче
             
         Returns:
             Результат создания задачи
@@ -110,13 +116,6 @@ class Bitrix24Client:
         if deadline:
             task_data["fields"]["DEADLINE"] = deadline
         
-        if file_ids:
-            # Пробуем разные форматы для прикрепления файлов
-            # Формат 1: UF_TASK_WEBDAV_FILES (стандартный)
-            task_data["fields"]["UF_TASK_WEBDAV_FILES"] = file_ids
-            # Также пробуем FILES (альтернативный формат)
-            # task_data["fields"]["FILES"] = file_ids
-        
         # Добавляем подразделение, если указано
         # Примечание: В Bitrix24 для задач может использоваться поле GROUP_ID (для группы) 
         # или пользовательское поле типа UF_DEPARTMENT или UF_CRM_TASK_DEPARTMENT
@@ -127,8 +126,82 @@ class Bitrix24Client:
             # Если в вашем Bitrix24 используется другое поле, замените GROUP_ID на нужное
             task_data["fields"]["GROUP_ID"] = department_id
         
+        # Если файлы переданы напрямую, пробуем прикрепить их при создании задачи
+        if files and not file_ids:
+            logger.info(f"Попытка прямого прикрепления {len(files)} файлов к задаче при создании")
+            result = self._create_task_with_files(task_data, files)
+            if result:
+                return result
+            logger.warning("Прямое прикрепление файлов не сработало, пробуем загрузить на диск")
+            # Если прямой способ не сработал, загружаем файлы на диск
+            file_ids = []
+            for filename, file_content in files:
+                file_id = self.upload_file(file_content, filename)
+                if file_id:
+                    file_ids.append(file_id)
+        
+        # Прикрепляем файлы через ID (если они были загружены на диск)
+        if file_ids:
+            logger.info(f"Прикрепление {len(file_ids)} файлов к задаче через ID")
+            # Пробуем разные форматы для прикрепления файлов
+            # Формат 1: UF_TASK_WEBDAV_FILES (стандартный)
+            task_data["fields"]["UF_TASK_WEBDAV_FILES"] = file_ids
+            # Также пробуем FILES (альтернативный формат)
+            # task_data["fields"]["FILES"] = file_ids
+        
         result = self._make_request("tasks.task.add", task_data)
         return result
+    
+    def _create_task_with_files(self, task_data: Dict, files: List[tuple]) -> Optional[Dict]:
+        """
+        Создание задачи с прямым прикреплением файлов через multipart/form-data
+        
+        В Bitrix24 файлы можно прикрепить напрямую к задаче при создании через поле FILES
+        """
+        try:
+            url = f"{self.base_url}/tasks.task.add"
+            
+            # Подготавливаем данные задачи в формате для multipart
+            form_data = {}
+            for key, value in task_data.get("fields", {}).items():
+                if isinstance(value, list):
+                    # Для массивов (например, ACCOMPLICES) передаем каждый элемент отдельно
+                    for i, item in enumerate(value):
+                        form_data[f"fields[{key}][{i}]"] = str(item)
+                else:
+                    form_data[f"fields[{key}]"] = str(value)
+            
+            # Подготавливаем файлы для multipart
+            # В Bitrix24 файлы передаются через поле FILES с индексами
+            files_dict = {}
+            for i, (filename, file_content) in enumerate(files):
+                # Определяем MIME тип по расширению файла
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+                
+                files_dict[f"FILES[{i}]"] = (filename, file_content, mime_type)
+            
+            logger.debug(f"Попытка создания задачи с {len(files)} файлами через multipart/form-data")
+            response = requests.post(url, data=form_data, files=files_dict)
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get("result"):
+                logger.info(f"✅ Задача создана с прямым прикреплением {len(files)} файлов")
+                return result
+            
+            error = result.get("error", "")
+            error_description = result.get("error_description", "")
+            if error:
+                logger.debug(f"Ошибка при создании задачи с файлами: {error} - {error_description}")
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Ошибка при прямом прикреплении файлов к задаче: {e}")
+            return None
     
     def upload_file(self, file_content: bytes, filename: str, folder_id: str = "shared_files") -> Optional[int]:
         """
