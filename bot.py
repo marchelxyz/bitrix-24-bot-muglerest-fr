@@ -2651,16 +2651,25 @@ def main():
                                 
                                 if task_data:
                                     task_id = task_data.get('ID') or task_data.get('id')
-                                    logger.debug(f"Обработка события задачи {task_id}: {event}")
+                                    logger.info(f"🔍 Обработка события задачи {task_id}: {event}")
+                                    logger.debug(f"Данные задачи: {task_data}")
                                     
-                                    # Отправляем уведомления о задачах через TaskNotificationService
-                                    if TASK_NOTIFICATIONS_AVAILABLE and task_notification_service:
+                                    # Проверяем доступность сервиса уведомлений
+                                    if not TASK_NOTIFICATIONS_AVAILABLE:
+                                        logger.warning(f"⚠️ Сервис уведомлений недоступен (TASK_NOTIFICATIONS_AVAILABLE=False)")
+                                    elif not task_notification_service:
+                                        logger.warning(f"⚠️ Сервис уведомлений не инициализирован (task_notification_service=None)")
+                                        logger.info(f"💡 Проверьте, что TELEGRAM_SUPERGROUP_ID установлен в переменных окружения")
+                                    else:
+                                        # Отправляем уведомления о задачах через TaskNotificationService
                                         try:
-                                            # Для событий задач можно отправить уведомление
-                                            # TODO: Реализовать отправку уведомлений при изменении задач
-                                            logger.debug(f"Сервис уведомлений доступен для задачи {task_id}, событие: {event}")
+                                            logger.info(f"📤 Отправка уведомления о событии {event} для задачи {task_id}...")
+                                            await task_notification_service.handle_task_event(event, task_data)
+                                            logger.info(f"✅ Обработано событие задачи {task_id}: {event}")
                                         except Exception as notif_error:
-                                            logger.debug(f"Ошибка при обработке уведомления о задаче: {notif_error}")
+                                            logger.error(f"❌ Ошибка при обработке уведомления о задаче {task_id}: {notif_error}", exc_info=True)
+                                else:
+                                    logger.warning(f"⚠️ Не удалось извлечь данные задачи из события {event}: {data_obj}")
                             
                             # События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE
                             elif 'ONTASKCOMMENT' in event_upper:
@@ -2678,15 +2687,25 @@ def main():
                                 if comment_data:
                                     task_id = comment_data.get('TASK_ID') or comment_data.get('taskId') or comment_data.get('TASKID')
                                     comment_id = comment_data.get('ID') or comment_data.get('id')
-                                    logger.debug(f"Обработка события комментария {comment_id} к задаче {task_id}: {event}")
+                                    logger.info(f"💬 Обработка события комментария {comment_id} к задаче {task_id}: {event}")
+                                    logger.debug(f"Данные комментария: {comment_data}")
                                     
-                                    # Отправляем уведомления о комментариях через TaskNotificationService
-                                    if TASK_NOTIFICATIONS_AVAILABLE and task_notification_service:
+                                    # Проверяем доступность сервиса уведомлений
+                                    if not TASK_NOTIFICATIONS_AVAILABLE:
+                                        logger.warning(f"⚠️ Сервис уведомлений недоступен (TASK_NOTIFICATIONS_AVAILABLE=False)")
+                                    elif not task_notification_service:
+                                        logger.warning(f"⚠️ Сервис уведомлений не инициализирован (task_notification_service=None)")
+                                        logger.info(f"💡 Проверьте, что TELEGRAM_SUPERGROUP_ID установлен в переменных окружения")
+                                    else:
+                                        # Отправляем уведомления о комментариях через TaskNotificationService
                                         try:
-                                            # TODO: Реализовать отправку уведомлений при добавлении комментариев
-                                            logger.debug(f"Сервис уведомлений доступен для комментария {comment_id} к задаче {task_id}, событие: {event}")
+                                            logger.info(f"📤 Отправка уведомления о событии {event} для комментария {comment_id}...")
+                                            await task_notification_service.handle_task_comment_event(event, comment_data)
+                                            logger.info(f"✅ Обработано событие комментария {comment_id} к задаче {task_id}: {event}")
                                         except Exception as notif_error:
-                                            logger.debug(f"Ошибка при обработке уведомления о комментарии: {notif_error}")
+                                            logger.error(f"❌ Ошибка при обработке уведомления о комментарии {comment_id}: {notif_error}", exc_info=True)
+                                else:
+                                    logger.warning(f"⚠️ Не удалось извлечь данные комментария из события {event}: {data_obj}")
                         else:
                             logger.debug(f"Событие {event} не обрабатывается (не связано с пользователями или задачами)")
                         
