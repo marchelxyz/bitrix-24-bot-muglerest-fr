@@ -63,6 +63,27 @@ bitrix_client = Bitrix24Client(
     telegram_field_name=os.getenv("BITRIX24_TELEGRAM_FIELD_NAME", "UF_USR_TELEGRAM")
 )
 
+# Состояния диалога
+WAITING_FOR_RESPONSIBLES, WAITING_FOR_DEADLINE, WAITING_FOR_DESCRIPTION, WAITING_FOR_FILES = range(4)
+
+# Хранилище соответствий Telegram User ID -> Bitrix24 User ID
+# Используется как fallback если PostgreSQL недоступен
+TELEGRAM_TO_BITRIX_MAPPING: Dict[int, int] = {}
+
+# Хранилище соответствий Telegram username -> Bitrix24 User ID (для поиска по имени)
+# Используется как fallback если PostgreSQL недоступен
+USERNAME_TO_BITRIX_MAPPING: Dict[str, int] = {}
+
+# Маппинг Telegram thread_id -> Bitrix24 Department ID
+# Используется как fallback если PostgreSQL недоступен
+# Можно также настроить через переменную окружения THREAD_DEPARTMENT_MAPPING в формате JSON:
+# {"123": 5, "456": 10} где 123 и 456 - thread_id, 5 и 10 - department_id
+THREAD_TO_DEPARTMENT_MAPPING: Dict[int, int] = {}
+
+# Глобальная переменная для сервиса уведомлений о задачах
+# Используется в обработчике исходящего вебхука Bitrix24
+task_notification_service = None
+
 # Инициализация PostgreSQL базы данных
 if DATABASE_AVAILABLE:
     try:
@@ -111,23 +132,6 @@ try:
 except Exception as e:
     logger.error(f"Ошибка при загрузке пользователей Bitrix24 при старте: {e}", exc_info=True)
     logger.warning("Бот будет работать, но список пользователей не был загружен")
-
-# Состояния диалога
-WAITING_FOR_RESPONSIBLES, WAITING_FOR_DEADLINE, WAITING_FOR_DESCRIPTION, WAITING_FOR_FILES = range(4)
-
-# Хранилище соответствий Telegram User ID -> Bitrix24 User ID
-# Используется как fallback если PostgreSQL недоступен
-TELEGRAM_TO_BITRIX_MAPPING: Dict[int, int] = {}
-
-# Хранилище соответствий Telegram username -> Bitrix24 User ID (для поиска по имени)
-# Используется как fallback если PostgreSQL недоступен
-USERNAME_TO_BITRIX_MAPPING: Dict[str, int] = {}
-
-# Маппинг Telegram thread_id -> Bitrix24 Department ID
-# Используется как fallback если PostgreSQL недоступен
-# Можно также настроить через переменную окружения THREAD_DEPARTMENT_MAPPING в формате JSON:
-# {"123": 5, "456": 10} где 123 и 456 - thread_id, 5 и 10 - department_id
-THREAD_TO_DEPARTMENT_MAPPING: Dict[int, int] = {}
 
 # Загружаем маппинг из переменной окружения при старте (для миграции/инициализации)
 try:
@@ -233,95 +237,21 @@ async def log_telegram_group_info(application: Application):
             if chat.description:
                 logger.info(f"📄 Описание: {chat.description[:100]}...")
             
-            # Пробуем получить информацию о разделах (topics/threads)
-            # В Telegram супергруппах с темами используется форум
-            if chat.type == "supergroup" or chat.type == "channel":
-                try:
-                    # Пробуем получить список форумных тем (для супергрупп с темами)
-                    # Используем метод get_forum_topics если доступен
-                    # Если метод недоступен, пробуем получить через обновления или другие способы
-                    
-                    logger.info("")
-                    logger.info("-" * 80)
-                    logger.info("📂 РАЗДЕЛЫ (THREADS/TOPICS) В ГРУППЕ:")
-                    logger.info("-" * 80)
-                    
-                    # Пробуем получить форумные темы через API
-                    topics_found = False
-                    
-                    # Способ 1: Пробуем использовать метод get_forum_topics (если доступен в версии библиотеки)
-                    try:
-                        if hasattr(application.bot, 'get_forum_topics'):
-                            forum_topics = await application.bot.get_forum_topics(
-                                chat_id=telegram_group_id_int
-                            )
-                            if forum_topics and hasattr(forum_topics, 'topics'):
-                                topics = forum_topics.topics
-                                if topics:
-                                    logger.info(f"{'ID темы':<20} | {'Название':<50}")
-                                    logger.info("-" * 80)
-                                    for topic in topics:
-                                        topic_id = getattr(topic, 'message_thread_id', None) or getattr(topic, 'id', None)
-                                        topic_name = getattr(topic, 'name', 'Без названия')
-                                        logger.info(f"{str(topic_id):<20} | {topic_name[:50]:<50}")
-                                    logger.info(f"✅ Найдено разделов: {len(topics)}")
-                                    topics_found = True
-                    except Exception as forum_error:
-                        logger.debug(f"Ошибка при получении форумных тем через get_forum_topics: {forum_error}")
-                    
-                    # Способ 2: Если метод библиотеки недоступен, пробуем прямой вызов Telegram Bot API
-                    if not topics_found:
-                        try:
-                            import requests
-                            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-                            if bot_token:
-                                # Используем метод getForumTopics из Telegram Bot API
-                                api_url = f"https://api.telegram.org/bot{bot_token}/getForumTopics"
-                                response = requests.post(api_url, json={"chat_id": telegram_group_id_int}, timeout=10)
-                                
-                                if response.status_code == 200:
-                                    result = response.json()
-                                    if result.get("ok") and result.get("result"):
-                                        topics_data = result["result"].get("topics", [])
-                                        if topics_data:
-                                            logger.info(f"{'ID темы':<20} | {'Название':<50}")
-                                            logger.info("-" * 80)
-                                            for topic in topics_data:
-                                                topic_id = topic.get("message_thread_id") or topic.get("id")
-                                                topic_name = topic.get("name", "Без названия")
-                                                logger.info(f"{str(topic_id):<20} | {topic_name[:50]:<50}")
-                                            logger.info(f"✅ Найдено разделов: {len(topics_data)}")
-                                            topics_found = True
-                        except Exception as api_error:
-                            logger.debug(f"Ошибка при получении форумных тем через прямой API: {api_error}")
-                    
-                    # Если не удалось получить разделы автоматически
-                    if not topics_found:
-                        logger.info("ℹ️ Не удалось получить список разделов автоматически")
-                        logger.info("💡 Для получения ID разделов:")
-                        logger.info("   1. Откройте раздел в группе")
-                        logger.info("   2. Используйте бота @userinfobot для получения thread_id")
-                        logger.info("   3. Или отправьте любое сообщение в раздел и проверьте поле message_thread_id в обновлениях")
-                        logger.info("   4. Или используйте команду /get_thread_id в разделе (если добавлена)")
-                    
-                    # Выводим текущий маппинг thread_id -> department_id если он есть
-                    if THREAD_TO_DEPARTMENT_MAPPING:
-                        logger.info("")
-                        logger.info("-" * 80)
-                        logger.info("🔗 ТЕКУЩИЙ МАППИНГ THREAD_ID -> DEPARTMENT_ID:")
-                        logger.info("-" * 80)
-                        logger.info(f"{'Thread ID':<20} | {'Department ID':<20}")
-                        logger.info("-" * 80)
-                        for thread_id, dept_id in sorted(THREAD_TO_DEPARTMENT_MAPPING.items()):
-                            logger.info(f"{str(thread_id):<20} | {str(dept_id):<20}")
-                        logger.info(f"✅ Всего маппингов: {len(THREAD_TO_DEPARTMENT_MAPPING)}")
-                    else:
-                        logger.info("")
-                        logger.info("ℹ️ Маппинг thread_id -> department_id не настроен")
-                        logger.info("💡 Для настройки используйте переменную THREAD_DEPARTMENT_MAPPING")
-                    
-                except Exception as topics_error:
-                    logger.debug(f"Ошибка при получении информации о разделах: {topics_error}")
+            # Выводим текущий маппинг thread_id -> department_id если он есть
+            if THREAD_TO_DEPARTMENT_MAPPING:
+                logger.info("")
+                logger.info("-" * 80)
+                logger.info("🔗 ТЕКУЩИЙ МАППИНГ THREAD_ID -> DEPARTMENT_ID:")
+                logger.info("-" * 80)
+                logger.info(f"{'Thread ID':<20} | {'Department ID':<20}")
+                logger.info("-" * 80)
+                for thread_id, dept_id in sorted(THREAD_TO_DEPARTMENT_MAPPING.items()):
+                    logger.info(f"{str(thread_id):<20} | {str(dept_id):<20}")
+                logger.info(f"✅ Всего маппингов: {len(THREAD_TO_DEPARTMENT_MAPPING)}")
+            else:
+                logger.info("")
+                logger.info("ℹ️ Маппинг thread_id -> department_id не настроен")
+                logger.info("💡 Для настройки используйте переменную THREAD_DEPARTMENT_MAPPING")
             
         except Exception as chat_error:
             logger.error(f"❌ Ошибка при получении информации о группе: {chat_error}")
@@ -707,53 +637,6 @@ async def group_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if chat.description:
             response_text += f"📄 Описание: {chat.description[:200]}...\n"
-        
-        # Пробуем получить информацию о разделах
-        topics_found = False
-        
-        # Способ 1: Через метод библиотеки
-        try:
-            if hasattr(context.bot, 'get_forum_topics'):
-                forum_topics = await context.bot.get_forum_topics(chat_id=telegram_group_id_int)
-                if forum_topics and hasattr(forum_topics, 'topics'):
-                    topics = forum_topics.topics
-                    if topics:
-                        response_text += "\n📂 **Разделы (Threads/Topics):**\n\n"
-                        for topic in topics:
-                            topic_id = getattr(topic, 'message_thread_id', None) or getattr(topic, 'id', None)
-                            topic_name = getattr(topic, 'name', 'Без названия')
-                            response_text += f"• ID: `{topic_id}` | Название: {topic_name}\n"
-                        response_text += f"\n✅ Всего разделов: {len(topics)}"
-                        topics_found = True
-        except Exception:
-            pass
-        
-        # Способ 2: Через прямой API вызов
-        if not topics_found:
-            try:
-                import requests
-                bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-                if bot_token:
-                    api_url = f"https://api.telegram.org/bot{bot_token}/getForumTopics"
-                    response = requests.post(api_url, json={"chat_id": telegram_group_id_int}, timeout=10)
-                    if response.status_code == 200:
-                        result = response.json()
-                        if result.get("ok") and result.get("result"):
-                            topics_data = result["result"].get("topics", [])
-                            if topics_data:
-                                response_text += "\n📂 **Разделы (Threads/Topics):**\n\n"
-                                for topic in topics_data:
-                                    topic_id = topic.get("message_thread_id") or topic.get("id")
-                                    topic_name = topic.get("name", "Без названия")
-                                    response_text += f"• ID: `{topic_id}` | Название: {topic_name}\n"
-                                response_text += f"\n✅ Всего разделов: {len(topics_data)}"
-                                topics_found = True
-            except Exception:
-                pass
-        
-        if not topics_found:
-            response_text += "\n\nℹ️ Не удалось получить список разделов автоматически.\n"
-            response_text += "💡 Для получения ID разделов используйте бота @userinfobot в разделе."
         
         # Добавляем информацию о маппинге
         if THREAD_TO_DEPARTMENT_MAPPING:
@@ -1921,6 +1804,10 @@ def main():
                                         telegram_group_id=telegram_group_id_int
                                     )
                                     
+                                    # Сохраняем в глобальную переменную для доступа из обработчика вебхука
+                                    global task_notification_service
+                                    task_notification_service = notification_service
+                                    
                                     # Запускаем периодическую проверку задач в фоне
                                     async def periodic_task_check():
                                         """Периодическая проверка задач"""
@@ -2413,12 +2300,15 @@ def main():
                         return web.json_response({'error': 'Внутренняя ошибка сервера'}, status=500)
                 
                 # API: Обработчик исходящего вебхука от Bitrix24
-                # Используется для получения уведомлений об обновлении пользователей
+                # Используется для получения уведомлений об обновлении пользователей и задач
                 # и синхронизации Telegram ID из Bitrix24 в БД
                 async def bitrix_outgoing_webhook_handler(request):
                     """
                     Обработчик исходящего вебхука от Bitrix24
-                    Получает уведомления об обновлении пользователей и синхронизирует Telegram ID
+                    Получает уведомления о событиях в Bitrix24:
+                    - События пользователей: ONUSERUPDATE, ONUSERADD - синхронизация Telegram ID
+                    - События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE - уведомления о задачах
+                    - События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE
                     
                     Формат данных от Bitrix24 может быть разным:
                     - Старый формат: {"event": "ONUSERUPDATE", "data": {"FIELDS": {...}}}
@@ -2541,8 +2431,63 @@ def main():
                                     logger.warning(f"Неверный формат Telegram ID: {telegram_id_str}, ошибка: {e}")
                             else:
                                 logger.debug(f"Пользователь {user_id} обновлен, но Telegram ID не указан в поле {telegram_field_name}")
+                        # Обрабатываем события задач
+                        elif 'TASK' in event.upper():
+                            event_upper = event.upper()
+                            
+                            # События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE
+                            if 'ONTASKADD' in event_upper or 'ONTASKUPDATE' in event_upper or 'ONTASKDELETE' in event_upper:
+                                logger.info(f"📋 Получено событие задачи: {event}")
+                                
+                                # Извлекаем данные задачи
+                                task_data = None
+                                if isinstance(data_obj, dict) and 'FIELDS' in data_obj:
+                                    task_data = data_obj['FIELDS']
+                                elif isinstance(data_obj, dict) and 'ID' in data_obj:
+                                    task_data = data_obj
+                                elif isinstance(data_obj, list) and len(data_obj) > 0:
+                                    task_data = data_obj[0]
+                                
+                                if task_data:
+                                    task_id = task_data.get('ID') or task_data.get('id')
+                                    logger.debug(f"Обработка события задачи {task_id}: {event}")
+                                    
+                                    # Отправляем уведомления о задачах через TaskNotificationService
+                                    if TASK_NOTIFICATIONS_AVAILABLE and task_notification_service:
+                                        try:
+                                            # Для событий задач можно отправить уведомление
+                                            # TODO: Реализовать отправку уведомлений при изменении задач
+                                            logger.debug(f"Сервис уведомлений доступен для задачи {task_id}, событие: {event}")
+                                        except Exception as notif_error:
+                                            logger.debug(f"Ошибка при обработке уведомления о задаче: {notif_error}")
+                            
+                            # События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE
+                            elif 'ONTASKCOMMENT' in event_upper:
+                                logger.info(f"💬 Получено событие комментария к задаче: {event}")
+                                
+                                # Извлекаем данные комментария
+                                comment_data = None
+                                if isinstance(data_obj, dict) and 'FIELDS' in data_obj:
+                                    comment_data = data_obj['FIELDS']
+                                elif isinstance(data_obj, dict):
+                                    comment_data = data_obj
+                                elif isinstance(data_obj, list) and len(data_obj) > 0:
+                                    comment_data = data_obj[0]
+                                
+                                if comment_data:
+                                    task_id = comment_data.get('TASK_ID') or comment_data.get('taskId') or comment_data.get('TASKID')
+                                    comment_id = comment_data.get('ID') or comment_data.get('id')
+                                    logger.debug(f"Обработка события комментария {comment_id} к задаче {task_id}: {event}")
+                                    
+                                    # Отправляем уведомления о комментариях через TaskNotificationService
+                                    if TASK_NOTIFICATIONS_AVAILABLE and task_notification_service:
+                                        try:
+                                            # TODO: Реализовать отправку уведомлений при добавлении комментариев
+                                            logger.debug(f"Сервис уведомлений доступен для комментария {comment_id} к задаче {task_id}, событие: {event}")
+                                        except Exception as notif_error:
+                                            logger.debug(f"Ошибка при обработке уведомления о комментарии: {notif_error}")
                         else:
-                            logger.debug(f"Событие {event} не обрабатывается (не связано с пользователями)")
+                            logger.debug(f"Событие {event} не обрабатывается (не связано с пользователями или задачами)")
                         
                         # Всегда возвращаем успешный ответ, чтобы Bitrix24 не повторял запрос
                         return web.json_response({'status': 'ok'}, status=200)

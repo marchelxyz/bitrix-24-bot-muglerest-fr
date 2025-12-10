@@ -246,65 +246,31 @@ class TaskNotificationService:
         """
         Проверка новых комментариев в задачах
         
+        ВАЖНО: Метод tasks.task.commentitem.getlist не существует в Bitrix24 API.
+        Для отслеживания изменений задач (комментарии, статусы) необходимо использовать
+        исходящий вебхук Bitrix24 (Outgoing Webhook).
+        
+        События для настройки в исходящем вебхуке:
+        - ONTASKADD - Создание задачи
+        - ONTASKUPDATE - Обновление задачи (включая изменение статуса)
+        - ONTASKDELETE - Удаление задачи
+        - ONTASKCOMMENTADD - Добавление комментария к задаче
+        - ONTASKCOMMENTUPDATE - Обновление комментария к задаче
+        - ONTASKCOMMENTDELETE - Удаление комментария к задаче
+        
         Args:
             last_check_time: Время последней проверки (опционально)
         """
         if not self.enable_comment_notifications:
             return
         
-        try:
-            logger.info("🔍 Проверка новых комментариев в задачах...")
-            
-            # Если время последней проверки не указано, проверяем за последний час
-            if not last_check_time:
-                last_check_time = datetime.now() - timedelta(hours=1)
-            
-            # Получаем задачи с комментариями за последний период
-            # В Bitrix24 API можно получить комментарии через tasks.task.commentitem.getlist
-            comments = self.bitrix_client.get_recent_task_comments(since=last_check_time)
-            
-            for comment in comments:
-                task_id = comment.get("taskId")
-                comment_id = comment.get("id")
-                author_id = comment.get("authorId")
-                responsible_id = comment.get("task", {}).get("responsibleId")
-                
-                if not task_id or not comment_id:
-                    continue
-                
-                # Проверяем, не отправляли ли уже уведомление об этом комментарии
-                notification_key = self._get_notification_key(task_id, "comment", str(comment_id))
-                if self._was_notification_sent(notification_key):
-                    continue
-                
-                # Получаем Telegram ID ответственного (не автора комментария)
-                telegram_id = None
-                if responsible_id:
-                    telegram_id = self.bitrix_client.get_user_telegram_id(int(responsible_id))
-                
-                # Если комментарий оставил сам ответственный, не отправляем уведомление
-                if author_id == responsible_id:
-                    continue
-                
-                # Формируем ссылку на задачу
-                task_url = self.bitrix_client.get_task_url(int(task_id), responsible_id)
-                
-                # Формируем сообщение
-                task_title = comment.get("task", {}).get("title", "Без названия")
-                comment_text = comment.get("text", "")[:100]  # Первые 100 символов
-                if len(comment.get("text", "")) > 100:
-                    comment_text += "..."
-                
-                message = f"новый комментарий в задаче <a href='{task_url}'>«{task_title}»</a>: {comment_text}"
-                
-                # Отправляем уведомление
-                await self._send_notification(message, telegram_id)
-                self._mark_notification_sent(notification_key, int(task_id), "comment", str(comment_id))
-                
-                logger.info(f"✅ Отправлено уведомление о комментарии в задаче {task_id}")
-        
-        except Exception as e:
-            logger.error(f"❌ Ошибка при проверке комментариев: {e}", exc_info=True)
+        # Отключаем проверку комментариев через API, так как метод не существует
+        logger.warning("⚠️ Проверка комментариев через API отключена")
+        logger.info("💡 Для отслеживания изменений задач (комментарии, статусы) используйте исходящий вебхук Bitrix24")
+        logger.info("   Настройка: Bitrix24 → Настройки → Разработчикам → Исходящий вебхук")
+        logger.info("   События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE")
+        logger.info("   События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE")
+        return
     
     async def run_periodic_check(self):
         """Запуск периодической проверки задач"""
@@ -316,7 +282,8 @@ class TaskNotificationService:
         # Проверяем предупреждения о дедлайне
         await self.check_deadline_warnings()
         
-        # Проверяем новые комментарии
-        await self.check_task_comments()
+        # Проверка комментариев отключена - метод tasks.task.commentitem.getlist не существует
+        # Для отслеживания изменений задач используйте исходящий вебхук Bitrix24
+        # await self.check_task_comments()
         
         logger.info("✅ Периодическая проверка задач завершена")

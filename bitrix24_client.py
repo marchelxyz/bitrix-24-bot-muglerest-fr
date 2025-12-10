@@ -1811,85 +1811,33 @@ class Bitrix24Client:
         """
         Получение недавних комментариев к задачам
         
+        ВАЖНО: Метод tasks.task.commentitem.getlist не существует в Bitrix24 API.
+        Этот метод всегда возвращает пустой список.
+        
+        Для отслеживания изменений задач (комментарии, статусы) необходимо использовать
+        исходящий вебхук Bitrix24 (Outgoing Webhook).
+        
+        Настройка исходящего вебхука:
+        1. Bitrix24 → Настройки → Разработчикам → Исходящий вебхук
+        2. Создайте новый вебхук с событиями задач:
+           - ONTASKADD - Создание задачи
+           - ONTASKUPDATE - Обновление задачи
+           - ONTASKDELETE - Удаление задачи
+           - ONTASKCOMMENTADD - Добавление комментария к задаче
+           - ONTASKCOMMENTUPDATE - Обновление комментария к задаче
+           - ONTASKCOMMENTDELETE - Удаление комментария к задаче
+        3. Укажите URL вашего сервера для приема событий: https://your-domain.com/api/bitrix/webhook
+        
         Args:
             since: Дата начала периода (по умолчанию последний час)
             
         Returns:
-            Список комментариев
+            Пустой список (метод не поддерживается в Bitrix24 API)
         """
-        try:
-            if not since:
-                since = datetime.now() - timedelta(hours=1)
-            
-            # Получаем все задачи, которые были изменены недавно
-            # Затем получаем комментарии для этих задач
-            filter_params = {
-                "CHANGED_DATE": f">={since.strftime('%Y-%m-%d %H:%M:%S')}"
-            }
-            
-            tasks = self.get_tasks(filter_params=filter_params)
-            all_comments = []
-            
-            for task in tasks:
-                task_id = task.get("id")
-                if not task_id:
-                    continue
-                
-                try:
-                    # Получаем комментарии для задачи
-                    comments_result = self._make_request("tasks.task.commentitem.getlist", {
-                        "TASKID": task_id
-                    })
-                    
-                    if comments_result.get("result"):
-                        comments = comments_result["result"]
-                        if isinstance(comments, list):
-                            for comment in comments:
-                                # Проверяем, что комментарий создан после указанной даты
-                                comment_date_str = comment.get("POST_DATE")
-                                if comment_date_str:
-                                    try:
-                                        from datetime import datetime
-                                        comment_date = datetime.fromisoformat(comment_date_str.replace('Z', '+00:00'))
-                                        if comment_date.replace(tzinfo=None) >= since:
-                                            formatted_comment = {
-                                                "id": comment.get("ID"),
-                                                "taskId": task_id,
-                                                "text": comment.get("POST_MESSAGE", ""),
-                                                "authorId": comment.get("AUTHOR_ID"),
-                                                "postDate": comment_date_str,
-                                                "task": task  # Добавляем информацию о задаче
-                                            }
-                                            all_comments.append(formatted_comment)
-                                    except Exception as date_error:
-                                        logger.debug(f"Ошибка при парсинге даты комментария: {date_error}")
-                                        # Если не удалось распарсить дату, добавляем комментарий
-                                        formatted_comment = {
-                                            "id": comment.get("ID"),
-                                            "taskId": task_id,
-                                            "text": comment.get("POST_MESSAGE", ""),
-                                            "authorId": comment.get("AUTHOR_ID"),
-                                            "postDate": comment_date_str,
-                                            "task": task
-                                        }
-                                        all_comments.append(formatted_comment)
-                        elif isinstance(comments, dict):
-                            # Если результат - один комментарий
-                            comment = comments
-                            formatted_comment = {
-                                "id": comment.get("ID"),
-                                "taskId": task_id,
-                                "text": comment.get("POST_MESSAGE", ""),
-                                "authorId": comment.get("AUTHOR_ID"),
-                                "postDate": comment.get("POST_DATE"),
-                                "task": task
-                            }
-                            all_comments.append(formatted_comment)
-                except Exception as comment_error:
-                    logger.debug(f"Ошибка при получении комментариев для задачи {task_id}: {comment_error}")
-                    continue
-            
-            return all_comments
-        except Exception as e:
-            logger.error(f"Ошибка при получении комментариев: {e}", exc_info=True)
-            return []
+        logger.warning("⚠️ Метод get_recent_task_comments не поддерживается в Bitrix24 API")
+        logger.info("💡 Метод tasks.task.commentitem.getlist не существует")
+        logger.info("💡 Для отслеживания изменений задач используйте исходящий вебхук Bitrix24")
+        logger.info("   Настройка: Bitrix24 → Настройки → Разработчикам → Исходящий вебхук")
+        logger.info("   События задач: ONTASKADD, ONTASKUPDATE, ONTASKDELETE")
+        logger.info("   События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE")
+        return []
