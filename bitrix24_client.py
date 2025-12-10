@@ -1858,16 +1858,33 @@ class Bitrix24Client:
                             logger.info(f"   created_by (snake_case): {task_data.get('created_by')}")
                             logger.info(f"   Найденный created_by: {created_by}")
                             
+                            # Bitrix24 API возвращает поля в формате camelCase, а не UPPERCASE
+                            # Проверяем оба формата для совместимости
+                            title = task_data.get("title") or task_data.get("TITLE", "")
+                            description = task_data.get("description") or task_data.get("DESCRIPTION", "")
+                            deadline = task_data.get("deadline") or task_data.get("DEADLINE")
+                            status = task_data.get("status") or task_data.get("STATUS")
+                            created_date = task_data.get("createdDate") or task_data.get("CREATED_DATE")
+                            changed_date = task_data.get("changedDate") or task_data.get("CHANGED_DATE")
+                            
+                            logger.info(f"📝 ИЗВЛЕЧЕННЫЕ ДАННЫЕ ИЗ task_data:")
+                            logger.info(f"   title (camelCase/UPPERCASE): {title}")
+                            logger.info(f"   description (camelCase/UPPERCASE): {description[:100] if description else None}...")
+                            logger.info(f"   deadline: {deadline}")
+                            logger.info(f"   status: {status}")
+                            logger.info(f"   created_date: {created_date}")
+                            logger.info(f"   changed_date: {changed_date}")
+                            
                             return {
                                 "id": task_id,
-                                "title": task_data.get("TITLE", ""),
-                                "description": task_data.get("DESCRIPTION", ""),
-                                "deadline": task_data.get("DEADLINE"),
-                                "status": task_data.get("STATUS"),
+                                "title": title,
+                                "description": description,
+                                "deadline": deadline,
+                                "status": status,
                                 "responsibleId": responsible_id,
                                 "createdBy": created_by,
-                                "createdDate": task_data.get("CREATED_DATE"),
-                                "changedDate": task_data.get("CHANGED_DATE")
+                                "createdDate": created_date,
+                                "changedDate": changed_date
                             }
                         else:
                             logger.warning(f"⚠️ task_data не является словарем: {type(task_data)}, значение: {task_data}")
