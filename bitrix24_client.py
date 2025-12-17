@@ -2300,6 +2300,12 @@ class Bitrix24Client:
                 'func': lambda: self._try_get_message_method12(chat_id, message_id)
             })
         
+        # Метод 13: task.commentitem.get (новый метод из документации Bitrix24)
+        methods.append({
+            'name': 'Метод 13: task.commentitem.get',
+            'func': lambda: self._try_get_message_method13(task_id, message_id)
+        })
+        
         # Пробуем все методы по очереди
         for method_info in methods:
             try:
@@ -2472,3 +2478,116 @@ class Bitrix24Client:
             "MESSAGE_ID": message_id
         })
         return result.get("result") if result else None
+    
+    def _try_get_message_method13(self, task_id: int, item_id: int) -> Optional[Dict]:
+        """
+        Метод 13: task.commentitem.get (новый метод из документации Bitrix24)
+        
+        Параметры согласно документации:
+        - TASKID (integer) — идентификатор задачи
+        - ITEMID (integer) — идентификатор комментария
+        """
+        try:
+            # Пробуем разные варианты названия метода и параметров
+            variants = [
+                # Вариант 1: task.commentitem.get с TASKID и ITEMID (как в документации)
+                {
+                    "method": "task.commentitem.get",
+                    "params": {"TASKID": task_id, "ITEMID": item_id}
+                },
+                # Вариант 2: tasks.task.commentitem.get с TASKID и ITEMID
+                {
+                    "method": "tasks.task.commentitem.get",
+                    "params": {"TASKID": task_id, "ITEMID": item_id}
+                },
+                # Вариант 3: task.commentitem.get с taskId и itemId (camelCase)
+                {
+                    "method": "task.commentitem.get",
+                    "params": {"taskId": task_id, "itemId": item_id}
+                },
+                # Вариант 4: tasks.task.commentitem.get с taskId и itemId
+                {
+                    "method": "tasks.task.commentitem.get",
+                    "params": {"taskId": task_id, "itemId": item_id}
+                },
+                # Вариант 5: task.commentitem.get с TASK_ID и ITEM_ID
+                {
+                    "method": "task.commentitem.get",
+                    "params": {"TASK_ID": task_id, "ITEM_ID": item_id}
+                },
+                # Вариант 6: tasks.task.commentitem.get с TASK_ID и ITEM_ID
+                {
+                    "method": "tasks.task.commentitem.get",
+                    "params": {"TASK_ID": task_id, "ITEM_ID": item_id}
+                },
+            ]
+            
+            for variant in variants:
+                try:
+                    logger.debug(f"Попытка метода {variant['method']} с параметрами {variant['params']}")
+                    result = self._make_request(variant["method"], variant["params"])
+                    
+                    if result and result.get("result"):
+                        # Обрабатываем результат - может быть в разных форматах
+                        comment_data = result["result"]
+                        
+                        # Если результат - словарь с ключом "comment" или "item"
+                        if isinstance(comment_data, dict):
+                            # Пробуем разные возможные ключи
+                            comment = (
+                                comment_data.get("comment") or 
+                                comment_data.get("item") or 
+                                comment_data.get("COMMENT") or
+                                comment_data.get("ITEM") or
+                                comment_data  # Если сам результат и есть комментарий
+                            )
+                            
+                            if isinstance(comment, dict):
+                                # Извлекаем текст из разных возможных полей
+                                comment_text = (
+                                    comment.get("POST_MESSAGE") or
+                                    comment.get("postMessage") or
+                                    comment.get("MESSAGE") or
+                                    comment.get("message") or
+                                    comment.get("TEXT") or
+                                    comment.get("text") or
+                                    comment.get("CONTENT") or
+                                    comment.get("content")
+                                )
+                                
+                                if comment_text:
+                                    return {
+                                        "message": comment_text,
+                                        "authorId": comment.get("AUTHOR_ID") or comment.get("authorId"),
+                                        "id": item_id
+                                    }
+                            elif isinstance(comment, str):
+                                # Если результат - просто строка с текстом
+                                return {
+                                    "message": comment,
+                                    "id": item_id
+                                }
+                        
+                        # Если результат - строка напрямую
+                        elif isinstance(comment_data, str):
+                            return {
+                                "message": comment_data,
+                                "id": item_id
+                            }
+                        
+                        logger.debug(f"Метод {variant['method']} вернул результат, но не удалось извлечь текст")
+                        logger.debug(f"   Структура результата: {type(comment_data)}, ключи: {list(comment_data.keys()) if isinstance(comment_data, dict) else 'N/A'}")
+                except Exception as e:
+                    error_str = str(e)
+                    # Если метод не найден (404), пробуем следующий вариант
+                    if "404" in error_str or "not found" in error_str.lower() or "Method not found" in error_str:
+                        logger.debug(f"Метод {variant['method']} не найден, пробуем следующий вариант")
+                        continue
+                    # Для других ошибок логируем и пробуем следующий вариант
+                    logger.debug(f"Ошибка при вызове {variant['method']}: {e}")
+                    continue
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Ошибка в _try_get_message_method13: {e}")
+            return None
