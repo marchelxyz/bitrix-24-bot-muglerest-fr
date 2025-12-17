@@ -2334,8 +2334,7 @@ class Bitrix24Client:
     
     def get_task_comment_text_multiple_methods(self, task_id: int, message_id: int, chat_id: int = None) -> Optional[str]:
         """
-        Получение текста комментария к задаче с использованием максимума возможных методов.
-        Пробует все методы по очереди до первого рабочего.
+        Получение текста комментария к задаче через метод im.dialog.messages.get.
         
         Args:
             task_id: ID задачи
@@ -2366,150 +2365,52 @@ class Bitrix24Client:
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка при получении chatId для задачи {task_id}: {e}")
         
-        # Список методов для попытки получения комментария
-        methods = []
+        # Проверяем наличие chat_id (обязателен для метода 8)
+        if not chat_id:
+            logger.error(f"❌ Не удалось получить chatId для задачи {task_id}, невозможно получить текст комментария")
+            return None
         
-        # Метод 1: im.message.get с chatId и id (camelCase)
-        if chat_id:
-            methods.append({
-                'name': 'Метод 1: im.message.get (chatId, id)',
-                'func': lambda: self._try_get_message_method1(chat_id, message_id)
-            })
-        
-        # Метод 2: im.message.get с CHAT_ID и ID (UPPERCASE)
-        if chat_id:
-            methods.append({
-                'name': 'Метод 2: im.message.get (CHAT_ID, ID)',
-                'func': lambda: self._try_get_message_method2(chat_id, message_id)
-            })
-        
-        # Метод 3: im.message.get с CHAT_ID и id (смешанный)
-        if chat_id:
-            methods.append({
-                'name': 'Метод 3: im.message.get (CHAT_ID, id)',
-                'func': lambda: self._try_get_message_method3(chat_id, message_id)
-            })
-        
-        # Метод 4: im.message.get только с ID (без CHAT_ID)
-        methods.append({
-            'name': 'Метод 4: im.message.get (только ID)',
-            'func': lambda: self._try_get_message_method4(message_id)
-        })
-        
-        # Метод 5: im.message.get с MESSAGE_ID вместо ID
-        methods.append({
-            'name': 'Метод 5: im.message.get (MESSAGE_ID)',
-            'func': lambda: self._try_get_message_method5(message_id)
-        })
-        
-        # Метод 6: im.message.list с последующим поиском по ID
-        if chat_id:
-            methods.append({
-                'name': 'Метод 6: im.message.list + поиск по ID',
-                'func': lambda: self._try_get_message_method6(chat_id, message_id)
-            })
-        
-        # Метод 7: tasks.task.comment.get (старый метод, может не работать)
-        methods.append({
-            'name': 'Метод 7: tasks.task.comment.get',
-            'func': lambda: self._try_get_message_method7(task_id, message_id)
-        })
-        
-        # Метод 8: im.dialog.messages.get (если существует)
-        if chat_id:
-            methods.append({
-                'name': 'Метод 8: im.dialog.messages.get',
-                'func': lambda: self._try_get_message_method8(chat_id, message_id)
-            })
-        
-        # Метод 9: im.dialog.get + im.message.list
-        if chat_id:
-            methods.append({
-                'name': 'Метод 9: im.dialog.get + im.message.list',
-                'func': lambda: self._try_get_message_method9(chat_id, message_id)
-            })
-        
-        # Метод 10: im.chat.get + im.message.list
-        if chat_id:
-            methods.append({
-                'name': 'Метод 10: im.chat.get + im.message.list',
-                'func': lambda: self._try_get_message_method10(chat_id, message_id)
-            })
-        
-        # Метод 11: im.message.get с chatId и messageId
-        if chat_id:
-            methods.append({
-                'name': 'Метод 11: im.message.get (chatId, messageId)',
-                'func': lambda: self._try_get_message_method11(chat_id, message_id)
-            })
-        
-        # Метод 12: im.message.get с CHAT_ID и MESSAGE_ID
-        if chat_id:
-            methods.append({
-                'name': 'Метод 12: im.message.get (CHAT_ID, MESSAGE_ID)',
-                'func': lambda: self._try_get_message_method12(chat_id, message_id)
-            })
-        
-        # Метод 13: task.commentitem.get (новый метод из документации Bitrix24)
-        methods.append({
-            'name': 'Метод 13: task.commentitem.get',
-            'func': lambda: self._try_get_message_method13(task_id, message_id)
-        })
-        
-        # Метод 14: forum.message.get (получение комментария через форум API)
-        methods.append({
-            'name': 'Метод 14: forum.message.get (через форум)',
-            'func': lambda: self._try_get_message_method14(task_id, message_id)
-        })
-        
-        # Метод 15: im.dialog.messages.get (новый метод из документации Bitrix24)
-        if chat_id:
-            methods.append({
-                'name': 'Метод 15: im.dialog.messages.get (новый API)',
-                'func': lambda: self._try_get_message_method15(chat_id, message_id)
-            })
-        
-        # Пробуем все методы по очереди
-        for method_info in methods:
-            try:
-                logger.info(f"🔍 Попытка: {method_info['name']}")
-                result = method_info['func']()
-                if result:
-                    # Обрабатываем разные форматы ответа (словарь или список)
-                    if isinstance(result, list):
-                        # Если результат - список, берем первое сообщение
-                        if len(result) > 0:
-                            result = result[0]
-                        else:
-                            logger.debug(f"⚠️ Метод {method_info['name']} вернул пустой список")
-                            continue
-                    
-                    if isinstance(result, dict):
-                        # Извлекаем текст из разных возможных полей
-                        comment_text = (
-                            result.get('message') or 
-                            result.get('MESSAGE') or 
-                            result.get('postMessage') or 
-                            result.get('POST_MESSAGE') or
-                            result.get('text') or
-                            result.get('TEXT')
-                        )
-                        if comment_text:
-                            logger.info(f"✅ Успешно: {method_info['name']} - получен текст комментария")
-                            return str(comment_text)
-                        else:
-                            logger.debug(f"⚠️ Метод {method_info['name']} вернул результат, но без текста сообщения")
-                            logger.debug(f"   Доступные поля: {list(result.keys())}")
+        # Используем рабочий метод: im.dialog.messages.get
+        try:
+            logger.info(f"🔍 Получение текста комментария через im.dialog.messages.get: taskId={task_id}, messageId={message_id}, chatId={chat_id}")
+            result = self._try_get_message_method8(chat_id, message_id)
+            
+            if result:
+                # Обрабатываем разные форматы ответа (словарь или список)
+                if isinstance(result, list):
+                    # Если результат - список, берем первое сообщение
+                    if len(result) > 0:
+                        result = result[0]
                     else:
-                        logger.debug(f"⚠️ Метод {method_info['name']} вернул неожиданный тип результата: {type(result)}")
+                        logger.warning(f"⚠️ Метод вернул пустой список")
+                        return None
+                
+                if isinstance(result, dict):
+                    # Извлекаем текст из разных возможных полей
+                    comment_text = (
+                        result.get('message') or 
+                        result.get('MESSAGE') or 
+                        result.get('postMessage') or 
+                        result.get('POST_MESSAGE') or
+                        result.get('text') or
+                        result.get('TEXT')
+                    )
+                    if comment_text:
+                        logger.info(f"✅ Успешно получен текст комментария через im.dialog.messages.get")
+                        return str(comment_text)
+                    else:
+                        logger.warning(f"⚠️ Метод вернул результат, но без текста сообщения")
+                        logger.debug(f"   Доступные поля: {list(result.keys())}")
+                        return None
                 else:
-                    logger.debug(f"❌ Метод {method_info['name']} вернул None")
-            except Exception as e:
-                logger.debug(f"❌ Метод {method_info['name']} вызвал ошибку: {type(e).__name__}: {e}")
-                continue
-        
-        logger.warning(f"⚠️ Все методы получения текста комментария не сработали для сообщения {message_id} к задаче {task_id}")
-        return None
+                    logger.warning(f"⚠️ Метод вернул неожиданный тип результата: {type(result)}")
+                    return None
+            else:
+                logger.warning(f"❌ Метод im.dialog.messages.get вернул None для сообщения {message_id} в чате {chat_id}")
+                return None
+        except Exception as e:
+            logger.error(f"❌ Ошибка при получении текста комментария через im.dialog.messages.get: {type(e).__name__}: {e}")
+            return None
     
     def _try_get_message_method1(self, chat_id: int, message_id: int) -> Optional[Dict]:
         """Метод 1: im.message.get с chatId и id (camelCase)"""
