@@ -501,14 +501,17 @@ class TaskNotificationService:
         logger.info("   События комментариев: ONTASKCOMMENTADD, ONTASKCOMMENTUPDATE, ONTASKCOMMENTDELETE")
         return
     
-    def _detect_task_changes(self, fields_before: Optional[Dict], fields_after: Optional[Dict], task_info: Optional[Dict] = None) -> Dict[str, any]:
+    def _detect_task_changes(self, task_info: Dict, previous_state: Optional[Dict] = None) -> Dict[str, any]:
         """
-        Определение изменений в задаче на основе сравнения FIELDS_BEFORE и FIELDS_AFTER
+        Определение изменений в задаче на основе сравнения текущего состояния с предыдущим
+        
+        ВАЖНО: Bitrix24 исходящий вебхук НЕ передает полные данные задачи в FIELDS_BEFORE/FIELDS_AFTER,
+        там только ID задачи. Поэтому мы сравниваем текущее состояние (из REST API) с предыдущим
+        состоянием, сохраненным в БД.
         
         Args:
-            fields_before: Данные задачи до изменения (из FIELDS_BEFORE)
-            fields_after: Данные задачи после изменения (из FIELDS_AFTER)
-            task_info: Полная информация о задаче из REST API (опционально, для проверки текущего состояния)
+            task_info: Полная информация о задаче из REST API (текущее состояние)
+            previous_state: Предыдущее состояние задачи из БД (опционально)
             
         Returns:
             Словарь с информацией об изменениях:
@@ -574,37 +577,25 @@ class TaskNotificationService:
                 logger.debug(f"Ошибка при нормализации даты {date_str}: {e}")
                 return date_str
         
-        # Если нет данных после изменения, пробуем использовать task_info
-        if not fields_after and task_info:
-            fields_after = task_info
-        
-        # Если нет данных после изменения, не можем определить изменения
-        if not fields_after:
-            logger.debug("Нет данных fields_after для определения изменений")
+        # Если нет данных задачи, не можем определить изменения
+        if not task_info:
+            logger.debug("Нет данных task_info для определения изменений")
             return changes
         
-        logger.debug(f"Определение изменений: fields_before={fields_before is not None}, fields_after={fields_after is not None}, task_info={task_info is not None}")
+        logger.debug(f"Определение изменений: previous_state={previous_state is not None}, task_info={task_info is not None}")
         
-        # Получаем значения полей из fields_after (текущее состояние)
-        deadline_after = get_field(fields_after, 'DEADLINE', 'deadline', 'Deadline')
-        status_after = get_field(fields_after, 'STATUS', 'status', 'Status')
-        responsible_after = get_field(fields_after, 'RESPONSIBLE_ID', 'responsibleId', 'RESPONSIBLEID', 'responsible_id')
-        title_after = get_field(fields_after, 'TITLE', 'title', 'Title')
+        # Получаем значения полей из task_info (текущее состояние)
+        deadline_after = get_field(task_info, 'DEADLINE', 'deadline', 'Deadline')
+        status_after = get_field(task_info, 'STATUS', 'status', 'Status')
+        responsible_after = get_field(task_info, 'RESPONSIBLE_ID', 'responsibleId', 'RESPONSIBLEID', 'responsible_id')
+        title_after = get_field(task_info, 'TITLE', 'title', 'Title')
         
-        # Если deadline_after не найден в fields_after, пробуем получить из task_info
-        if not deadline_after and task_info:
-            deadline_after = get_field(task_info, 'DEADLINE', 'deadline', 'Deadline')
-        
-        # Если status_after не найден в fields_after, пробуем получить из task_info
-        if status_after is None and task_info:
-            status_after = get_field(task_info, 'STATUS', 'status', 'Status')
-        
-        # Если есть fields_before, сравниваем значения
-        if fields_before:
-            deadline_before = get_field(fields_before, 'DEADLINE', 'deadline', 'Deadline')
-            status_before = get_field(fields_before, 'STATUS', 'status', 'Status')
-            responsible_before = get_field(fields_before, 'RESPONSIBLE_ID', 'responsibleId', 'RESPONSIBLEID', 'responsible_id')
-            title_before = get_field(fields_before, 'TITLE', 'title', 'Title')
+        # Если есть предыдущее состояние, сравниваем значения
+        if previous_state:
+            deadline_before = previous_state.get('deadline') or previous_state.get('DEADLINE')
+            status_before = previous_state.get('status') or previous_state.get('STATUS')
+            responsible_before = previous_state.get('responsible_id') or previous_state.get('RESPONSIBLE_ID')
+            title_before = previous_state.get('title') or previous_state.get('TITLE')
             
             # Проверяем изменение дедлайна (с нормализацией для правильного сравнения)
             deadline_before_normalized = normalize_date(deadline_before)
@@ -645,7 +636,7 @@ class TaskNotificationService:
                     changes['changes'].append('удален срок сдачи')
             
             # Проверяем изменение статуса
-            if status_before != status_after:
+            if str(status_before) != str(status_after) if status_before and status_after else status_before != status_after:
                 changes['status_changed'] = True
                 changes['status_before'] = status_before
                 changes['status_after'] = status_after
@@ -668,7 +659,7 @@ class TaskNotificationService:
                 changes['title_changed'] = True
                 changes['changes'].append('изменено название')
         else:
-            # Нет fields_before - проверяем текущее состояние
+            # Нет предыдущего состояния - проверяем текущее состояние
             # Проверяем, просрочен ли дедлайн (даже если он не был изменен)
             if deadline_after:
                 try:
@@ -688,14 +679,6 @@ class TaskNotificationService:
                         changes['changes'].append('дедлайн просрочен')
                 except Exception as e:
                     logger.debug(f"Ошибка при парсинге дедлайна {deadline_after}: {e}")
-            
-            # Если статус изменился (даже без fields_before, можем определить из task_info)
-            if status_after:
-                status_name_after = self._get_status_name(status_after)
-                if status_name_after:
-                    changes['status_changed'] = True
-                    changes['status_after'] = status_after
-                    changes['changes'].append(f'статус изменен на "{status_name_after}"')
         
         logger.debug(f"Обнаруженные изменения: {changes['changes']}")
         return changes
@@ -704,18 +687,20 @@ class TaskNotificationService:
         """
         Обработка события задачи из вебхука Bitrix24
         
-        Логика:
-        1. Исходящий токен (application_token) отправляет запрос на сервер
-        2. Сервер запрашивает у входящего токена (BITRIX24_WEBHOOK_TOKEN) информацию о задаче
-        3. После получения информации сервер сверяет с БД и отправляет уведомление
-           ТОЛЬКО ЕСЛИ пользователь зарегистрирован через LINK
+        ВАЖНО: Bitrix24 исходящий вебхук НЕ передает полные данные задачи в FIELDS_BEFORE/FIELDS_AFTER,
+        там только ID задачи. Поэтому мы:
+        1. Получаем полную информацию о задаче через REST API (tasks.task.get)
+        2. Получаем предыдущее состояние задачи из БД
+        3. Сравниваем текущее состояние с предыдущим для определения изменений
+        4. Сохраняем текущее состояние в БД для следующего сравнения
+        5. Отправляем уведомление ТОЛЬКО ЕСЛИ пользователь зарегистрирован через LINK
         
         Args:
             event: Тип события (ONTASKADD, ONTASKUPDATE, ONTASKDELETE)
-            task_data: Данные задачи из вебхука (обычно FIELDS_AFTER)
+            task_data: Данные задачи из вебхука (обычно FIELDS_AFTER, содержит только ID)
             auth_data: Данные авторизации из вебхука (опционально)
-            fields_before: Данные задачи до изменения (FIELDS_BEFORE) - опционально
-            fields_after: Данные задачи после изменения (FIELDS_AFTER) - опционально
+            fields_before: Данные задачи до изменения (FIELDS_BEFORE) - НЕ ИСПОЛЬЗУЕТСЯ (только ID)
+            fields_after: Данные задачи после изменения (FIELDS_AFTER) - НЕ ИСПОЛЬЗУЕТСЯ (только ID)
         """
         try:
             task_id = task_data.get('ID') or task_data.get('id')
@@ -745,11 +730,22 @@ class TaskNotificationService:
                     logger.warning(f"⚠️ Ошибка при получении задачи {task_id_int} через REST API: {e}")
                     return
             
+            # Получаем предыдущее состояние задачи из БД
+            previous_state = None
+            if DATABASE_AVAILABLE and task_info:
+                try:
+                    previous_state = database.get_task_state(task_id_int)
+                    if previous_state:
+                        logger.debug(f"Получено предыдущее состояние задачи {task_id_int} из БД")
+                    else:
+                        logger.debug(f"Предыдущее состояние задачи {task_id_int} не найдено в БД (первое обновление)")
+                except Exception as e:
+                    logger.debug(f"Ошибка при получении предыдущего состояния задачи {task_id_int}: {e}")
+            
             # Логируем данные для отладки
             logger.debug(f"Данные для определения изменений задачи {task_id_int}:")
-            logger.debug(f"  fields_before: {fields_before}")
-            logger.debug(f"  fields_after: {fields_after}")
-            logger.debug(f"  task_info: {task_info.get('deadline') if task_info else None}, {task_info.get('status') if task_info else None}")
+            logger.debug(f"  previous_state: {previous_state is not None}")
+            logger.debug(f"  task_info: deadline={task_info.get('deadline') if task_info else None}, status={task_info.get('status') if task_info else None}")
             
             # Получаем название задачи и ответственных
             if task_info:
@@ -808,9 +804,8 @@ class TaskNotificationService:
             
             # Формируем сообщение в зависимости от типа события
             if 'ONTASKUPDATE' in event_upper:
-                # Определяем изменения через сравнение FIELDS_BEFORE и FIELDS_AFTER
-                # Передаем task_info для проверки текущего состояния, если fields_after отсутствует
-                task_changes = self._detect_task_changes(fields_before, fields_after if fields_after else task_data, task_info)
+                # Определяем изменения через сравнение текущего состояния с предыдущим из БД
+                task_changes = self._detect_task_changes(task_info, previous_state)
                 
                 logger.debug(f"Результат определения изменений для задачи {task_id_int}: {task_changes}")
                 
@@ -858,6 +853,14 @@ class TaskNotificationService:
             
             # Отмечаем уведомление как отправленное
             self._mark_notification_sent(notification_key, task_id_int, notification_type, event_upper)
+            
+            # Сохраняем текущее состояние задачи в БД для следующего сравнения
+            if DATABASE_AVAILABLE and task_info:
+                try:
+                    database.save_task_state(task_id_int, task_info)
+                    logger.debug(f"Сохранено состояние задачи {task_id_int} в БД")
+                except Exception as e:
+                    logger.debug(f"Ошибка при сохранении состояния задачи {task_id_int}: {e}")
             
             logger.info(f"✅ Отправлено уведомление о событии {event} для задачи {task_id_int} (уведомлены: {len(telegram_ids)} пользователей)")
             
