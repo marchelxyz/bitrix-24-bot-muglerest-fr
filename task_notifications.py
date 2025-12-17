@@ -4,9 +4,12 @@
 import os
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 from bitrix24_client import Bitrix24Client
+
+# Московское время (UTC+3)
+MSK_TIMEZONE = timezone(timedelta(hours=3))
 
 try:
     import database
@@ -325,9 +328,9 @@ class TaskNotificationService:
         try:
             logger.info(f"🔍 Проверка задач с дедлайном через {self.deadline_warning_hours} часов...")
             
-            # Вычисляем время предупреждения
-            warning_time = datetime.now() + timedelta(hours=self.deadline_warning_hours)
-            now = datetime.now()
+            # Вычисляем время предупреждения (в московском времени)
+            warning_time = datetime.now(MSK_TIMEZONE) + timedelta(hours=self.deadline_warning_hours)
+            now = datetime.now(MSK_TIMEZONE)
             
             # Получаем задачи с дедлайном в ближайшие N часов
             # Bitrix24 использует операторы >= и <= для фильтров
@@ -386,14 +389,17 @@ class TaskNotificationService:
                     if 'T' in deadline_str or 'Z' in deadline_str:
                         # ISO формат с временной зоной
                         deadline_dt = datetime.fromisoformat(deadline_str.replace('Z', '+00:00'))
-                        # Убираем временную зону для вычисления разницы
+                        # Конвертируем в московское время перед удалением временной зоны
                         if deadline_dt.tzinfo:
-                            deadline_dt = deadline_dt.replace(tzinfo=None)
+                            deadline_dt = deadline_dt.astimezone(MSK_TIMEZONE).replace(tzinfo=None)
+                        else:
+                            # Если нет временной зоны, считаем что это UTC и конвертируем в МСК
+                            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc).astimezone(MSK_TIMEZONE).replace(tzinfo=None)
                     else:
-                        # Простой формат YYYY-MM-DD HH:MI:SS
+                        # Простой формат YYYY-MM-DD HH:MI:SS (считаем что это уже в МСК)
                         deadline_dt = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M:%S')
                     
-                    now = datetime.now()
+                    now = datetime.now(MSK_TIMEZONE)
                     hours_left = int((deadline_dt - now).total_seconds() / 3600)
                     if hours_left < 0:
                         hours_left = 0
@@ -588,21 +594,23 @@ class TaskNotificationService:
                 # Проверяем, просрочен ли дедлайн
                 if deadline_after:
                     try:
-                        from datetime import timezone
                         # Парсим дату дедлайна
                         if isinstance(deadline_after, str):
                             if 'T' in deadline_after or 'Z' in deadline_after:
                                 deadline_dt = datetime.fromisoformat(deadline_after.replace('Z', '+00:00'))
                                 if deadline_dt.tzinfo:
-                                    # ВАЖНО: Конвертируем в UTC перед удалением временной зоны
-                                    deadline_dt = deadline_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                                    # ВАЖНО: Конвертируем в московское время перед удалением временной зоны
+                                    deadline_dt = deadline_dt.astimezone(MSK_TIMEZONE).replace(tzinfo=None)
+                                else:
+                                    # Если нет временной зоны, считаем что это UTC и конвертируем в МСК
+                                    deadline_dt = deadline_dt.replace(tzinfo=timezone.utc).astimezone(MSK_TIMEZONE).replace(tzinfo=None)
                             else:
                                 deadline_dt = datetime.strptime(deadline_after, '%Y-%m-%d %H:%M:%S')
                         else:
                             deadline_dt = deadline_after
                         
                         # Если дедлайн просрочен, показываем это, иначе показываем изменение срока
-                        now = datetime.now()
+                        now = datetime.now(MSK_TIMEZONE)
                         is_overdue = deadline_dt < now
                         logger.debug(f"🔍 Проверка просроченности дедлайна: deadline={deadline_dt}, current={now}, overdue={is_overdue}")
                         if is_overdue:
@@ -647,19 +655,21 @@ class TaskNotificationService:
             # Проверяем, просрочен ли дедлайн (даже если он не был изменен)
             if deadline_after:
                 try:
-                    from datetime import timezone
                     if isinstance(deadline_after, str):
                         if 'T' in deadline_after or 'Z' in deadline_after:
                             deadline_dt = datetime.fromisoformat(deadline_after.replace('Z', '+00:00'))
                             if deadline_dt.tzinfo:
-                                # ВАЖНО: Конвертируем в UTC перед удалением временной зоны
-                                deadline_dt = deadline_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                                # ВАЖНО: Конвертируем в московское время перед удалением временной зоны
+                                deadline_dt = deadline_dt.astimezone(MSK_TIMEZONE).replace(tzinfo=None)
+                            else:
+                                # Если нет временной зоны, считаем что это UTC и конвертируем в МСК
+                                deadline_dt = deadline_dt.replace(tzinfo=timezone.utc).astimezone(MSK_TIMEZONE).replace(tzinfo=None)
                         else:
                             deadline_dt = datetime.strptime(deadline_after, '%Y-%m-%d %H:%M:%S')
                     else:
                         deadline_dt = deadline_after
                     
-                    now = datetime.now()
+                    now = datetime.now(MSK_TIMEZONE)
                     is_overdue = deadline_dt < now
                     logger.debug(f"🔍 Проверка просроченности дедлайна (без предыдущего состояния): deadline={deadline_dt}, current={now}, overdue={is_overdue}")
                     if is_overdue:
@@ -1200,6 +1210,21 @@ class TaskNotificationService:
                 logger.info(f"   Создатель: {created_by_id}, Исполнитель: {responsible_id}, Автор: {author_id}")
                 return
             
+            # Проверяем, является ли комментарий уведомлением о создании задачи
+            # Такие уведомления не нужно отправлять
+            comment_text_to_check = comment_text
+            if not comment_text_to_check and full_comment_info:
+                comment_text_to_check = (
+                    full_comment_info.get('message') or 
+                    full_comment_info.get('MESSAGE') or 
+                    full_comment_info.get('postMessage') or
+                    full_comment_info.get('POST_MESSAGE')
+                )
+            
+            if comment_text_to_check and self._is_task_creation_notification(comment_text_to_check):
+                logger.info(f"⏭️ Пропуск уведомления о комментарии {comment_id_int} к задаче {task_id_int}: это уведомление о создании задачи")
+                return
+            
             # Формируем сообщение в зависимости от типа события
             if 'ONTASKCOMMENTADD' in event_upper:
                 # Если есть текст комментария, добавляем его в сообщение
@@ -1259,6 +1284,46 @@ class TaskNotificationService:
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке события комментария {event}: {e}", exc_info=True)
     
+    def _is_task_creation_notification(self, comment_text: str) -> bool:
+        """
+        Проверка, является ли комментарий уведомлением о создании задачи
+        
+        Bitrix24 автоматически создает комментарии вида:
+        "Мазов Роман создал [URL=/company/personal/user/1665/tasks/task/view/41127/]задачу[/URL]"
+        
+        Такие уведомления не нужно отправлять, так как они являются системными.
+        
+        Args:
+            comment_text: Текст комментария
+            
+        Returns:
+            True если это уведомление о создании задачи, False иначе
+        """
+        if not comment_text:
+            return False
+        
+        comment_text_lower = str(comment_text).lower()
+        
+        # Паттерны для определения уведомления о создании задачи:
+        # 1. "создал [URL=...]задачу[/URL]"
+        # 2. "создал задачу"
+        # 3. "создал[URL=...]задачу[/URL]" (без пробела)
+        # 4. Варианты с разными регистрами
+        
+        patterns = [
+            r'создал\s*\[url=.*?\]задачу\[/url\]',
+            r'создал\s+задачу',
+            r'создал\s*\[url=.*?\]задачу',
+            r'создал.*?задачу',
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, comment_text_lower):
+                logger.debug(f"Обнаружено уведомление о создании задачи в тексте: {comment_text[:100]}...")
+                return True
+        
+        return False
+    
     def _format_bitrix_text(self, text: str) -> str:
         """
         Форматирование текста из Bitrix24 для читаемого отображения
@@ -1295,8 +1360,8 @@ class TaskNotificationService:
                 if timestamp_match:
                     timestamp_str = timestamp_match.group(1)
                     timestamp = int(timestamp_str)
-                    # Преобразуем Unix timestamp в дату и время
-                    dt = datetime.fromtimestamp(timestamp)
+                    # Преобразуем Unix timestamp в дату и время (в московском времени)
+                    dt = datetime.fromtimestamp(timestamp, tz=MSK_TIMEZONE)
                     # Форматируем в читаемый вид: "ДД.ММ.ГГГГ ЧЧ:ММ"
                     return dt.strftime('%d.%m.%Y %H:%M')
             except (ValueError, OSError, OverflowError) as e:
