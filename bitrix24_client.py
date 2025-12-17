@@ -2008,6 +2008,7 @@ class Bitrix24Client:
                             created_by = self._get_task_field(task_data, ['createdBy', 'CREATED_BY', 'created_by', 'CREATEDBY'])
                             created_date = self._get_task_field(task_data, ['createdDate', 'CREATED_DATE', 'created_date', 'CREATEDDATE'])
                             changed_date = self._get_task_field(task_data, ['changedDate', 'CHANGED_DATE', 'changed_date', 'CHANGEDDATE'])
+                            chat_id = self._get_task_field(task_data, ['chatId', 'CHAT_ID', 'chat_id', 'CHATID'])
                             
                             logger.info(f"🔍 ПОИСК ПОЛЕЙ ОТВЕТСТВЕННОГО И СОЗДАТЕЛЯ:")
                             logger.info(f"   RESPONSIBLE_ID (прямой): {task_data.get('RESPONSIBLE_ID')}")
@@ -2020,6 +2021,11 @@ class Bitrix24Client:
                             logger.info(f"   Найденный created_by: {created_by}")
                             logger.info(f"   Найденный title: {title}")
                             logger.info(f"   Найденный description: {description[:100] if description else 'None'}...")
+                            logger.info(f"🔍 ПОИСК ПОЛЯ chatId:")
+                            logger.info(f"   chatId (прямой): {task_data.get('chatId')}")
+                            logger.info(f"   CHAT_ID (UPPERCASE): {task_data.get('CHAT_ID')}")
+                            logger.info(f"   chat_id (snake_case): {task_data.get('chat_id')}")
+                            logger.info(f"   Найденный chatId: {chat_id}")
                             
                             return {
                                 "id": task_id,
@@ -2030,7 +2036,8 @@ class Bitrix24Client:
                                 "responsibleId": responsible_id,
                                 "createdBy": created_by,
                                 "createdDate": created_date,
-                                "changedDate": changed_date
+                                "changedDate": changed_date,
+                                "chatId": chat_id
                             }
                         else:
                             logger.warning(f"⚠️ task_data не является словарем: {type(task_data)}, значение: {task_data}")
@@ -2344,6 +2351,12 @@ class Bitrix24Client:
                 task_info = self.get_task_by_id(task_id)
                 if task_info:
                     chat_id = task_info.get('chatId') or task_info.get('chat_id')
+                    # Преобразуем в int, если это строка
+                    if chat_id and isinstance(chat_id, str):
+                        try:
+                            chat_id = int(chat_id)
+                        except (ValueError, TypeError):
+                            chat_id = None
                     if chat_id:
                         logger.info(f"✅ Получен chatId {chat_id} для задачи {task_id}")
                     else:
