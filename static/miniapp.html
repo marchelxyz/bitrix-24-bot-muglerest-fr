@@ -700,27 +700,29 @@
                 }
                 
                 // Устанавливаем отдел, если он был автоматически определен
+                // Не загружаем подразделения здесь - они загрузятся параллельно ниже
                 if (data.department_id) {
                     document.getElementById('departmentId').value = data.department_id;
-                    // Загружаем список подразделений для отображения названия
-                    await loadDepartments();
-                    // Устанавливаем выбранное значение в select
-                    const departmentSelect = document.getElementById('departmentSelect');
-                    departmentSelect.value = data.department_id;
+                    // Значение в select установится после загрузки списка подразделений
                 }
                 
                 document.getElementById('originalMessage').textContent = data.original_message_text || '(нет текста)';
                 
-                // Загружаем список пользователей для выбора
-                await loadUsers();
-                
-                // Загружаем список подразделений
-                await loadDepartments();
-                
-                // Скрываем индикатор загрузки и показываем форму
+                // Скрываем индикатор загрузки и показываем форму СРАЗУ после загрузки сессии
+                // Списки пользователей и подразделений загрузим параллельно в фоне
                 document.getElementById('loading').classList.remove('show');
                 document.getElementById('taskForm').style.display = 'block';
                 console.log('Форма отображена');
+                
+                // Загружаем списки параллельно в фоне (не блокируем отображение формы)
+                Promise.all([
+                    loadUsers(),
+                    loadDepartments()
+                ]).then(() => {
+                    console.log('Списки пользователей и подразделений загружены');
+                }).catch(error => {
+                    console.error('Ошибка загрузки списков:', error);
+                });
             } catch (error) {
                 console.error('Ошибка загрузки сессии:', error);
                 document.getElementById('loading').classList.remove('show');
@@ -748,8 +750,8 @@
                     departmentsList = await response.json();
                     const departmentSelect = document.getElementById('departmentSelect');
                     
-                    // Сохраняем текущее выбранное значение
-                    const currentValue = departmentSelect.value;
+                    // Сохраняем текущее выбранное значение (из сессии или уже выбранное)
+                    const currentValue = document.getElementById('departmentId').value || departmentSelect.value;
                     
                     // Очищаем список (кроме первого элемента "Не выбрано")
                     departmentSelect.innerHTML = '<option value="">Не выбрано</option>';
@@ -762,20 +764,27 @@
                         departmentSelect.appendChild(option);
                     });
                     
-                    // Восстанавливаем выбранное значение, если оно было
+                    // Восстанавливаем выбранное значение из сессии или уже выбранное
                     if (currentValue) {
                         departmentSelect.value = currentValue;
+                        document.getElementById('departmentId').value = currentValue;
                     }
-                    
-                    // Обновляем скрытое поле при изменении select
-                    departmentSelect.addEventListener('change', function() {
-                        document.getElementById('departmentId').value = this.value || '';
-                    });
                 }
             } catch (error) {
                 console.error('Ошибка загрузки подразделений:', error);
             }
         }
+        
+        // Инициализация обработчика для select подразделений (один раз при загрузке страницы)
+        // Так как скрипт находится в конце body, DOM уже загружен, можно добавить обработчик сразу
+        (function initDepartmentSelectHandler() {
+            const departmentSelect = document.getElementById('departmentSelect');
+            if (departmentSelect) {
+                departmentSelect.addEventListener('change', function() {
+                    document.getElementById('departmentId').value = this.value || '';
+                });
+            }
+        })();
         
         // Изменение постановщика
         function changeCreator() {
