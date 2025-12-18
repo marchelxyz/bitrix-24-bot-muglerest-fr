@@ -85,6 +85,28 @@ class Bitrix24Client:
         
         return response.json()
     
+    def _adjust_deadline_time(self, deadline: str) -> str:
+        """
+        Добавляет 3 часа к UTC времени deadline для компенсации разницы в Bitrix24.
+        Bitrix24 интерпретирует UTC время как МСК, поэтому нужно скрыто добавить 3 часа.
+        
+        Args:
+            deadline: Дедлайн в формате YYYY-MM-DD HH:MM:SS (UTC)
+            
+        Returns:
+            Дедлайн с добавленными 3 часами в формате YYYY-MM-DD HH:MM:SS
+        """
+        try:
+            # Парсим deadline как UTC время
+            deadline_dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M:%S")
+            # Добавляем 3 часа
+            adjusted_dt = deadline_dt + timedelta(hours=3)
+            # Возвращаем в том же формате
+            return adjusted_dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            logger.warning(f"Ошибка при корректировке времени deadline '{deadline}': {e}. Используется исходное значение.")
+            return deadline
+    
     def create_task(
         self,
         title: str,
@@ -136,7 +158,10 @@ class Bitrix24Client:
             }
         
         if deadline:
-            task_data["fields"]["DEADLINE"] = deadline
+            # Добавляем 3 часа к UTC времени для компенсации разницы в Bitrix24
+            # Bitrix24 интерпретирует UTC время как МСК, поэтому нужно скрыто добавить 3 часа
+            adjusted_deadline = self._adjust_deadline_time(deadline)
+            task_data["fields"]["DEADLINE"] = adjusted_deadline
         
         # Добавляем подразделение, если указано
         # Примечание: В Bitrix24 для задач может использоваться поле GROUP_ID (для группы) 
