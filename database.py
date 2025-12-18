@@ -190,6 +190,16 @@ def init_database():
                     )
                 """)
                 
+                # Таблица для отслеживания задач, созданных из Telegram
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS telegram_created_tasks (
+                        task_id INTEGER PRIMARY KEY,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        creator_telegram_id BIGINT,
+                        creator_bitrix_id INTEGER
+                    )
+                """)
+                
                 # Создаем индексы для быстрого поиска
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_telegram_to_bitrix_bitrix_id 
@@ -229,6 +239,11 @@ def init_database():
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_webhook_events_received_at 
                     ON webhook_events(received_at)
+                """)
+                
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_telegram_created_tasks_task_id 
+                    ON telegram_created_tasks(task_id)
                 """)
                 
                 conn.commit()
@@ -699,4 +714,65 @@ def save_task_state(task_id: int, task_data: Dict) -> bool:
                 return True
     except Exception as e:
         logger.debug(f"Ошибка при сохранении состояния задачи {task_id}: {e}")
+        return False
+
+
+# Функции для работы с задачами, созданными из Telegram
+
+def mark_task_as_telegram_created(task_id: int, creator_telegram_id: int = None, creator_bitrix_id: int = None) -> bool:
+    """
+    Отметить задачу как созданную из Telegram
+    
+    Args:
+        task_id: ID задачи в Bitrix24
+        creator_telegram_id: Telegram ID создателя задачи (опционально)
+        creator_bitrix_id: Bitrix24 ID создателя задачи (опционально)
+        
+    Returns:
+        True если задача успешно отмечена, False в противном случае
+    """
+    if _connection_pool is None:
+        logger.warning("⚠️ Пул соединений PostgreSQL не инициализирован. Не удалось отметить задачу как созданную из Telegram.")
+        return False
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO telegram_created_tasks (task_id, creator_telegram_id, creator_bitrix_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (task_id) DO NOTHING
+                """, (task_id, creator_telegram_id, creator_bitrix_id))
+                conn.commit()
+                logger.debug(f"✅ Задача {task_id} отмечена как созданная из Telegram")
+                return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отметке задачи {task_id} как созданной из Telegram: {e}", exc_info=True)
+        return False
+
+
+def is_task_created_from_telegram(task_id: int) -> bool:
+    """
+    Проверка, была ли задача создана из Telegram
+    
+    Args:
+        task_id: ID задачи в Bitrix24
+        
+    Returns:
+        True если задача была создана из Telegram, False в противном случае
+    """
+    if _connection_pool is None:
+        return False
+    
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT task_id FROM telegram_created_tasks WHERE task_id = %s",
+                    (task_id,)
+                )
+                result = cur.fetchone()
+                return result is not None
+    except Exception as e:
+        logger.debug(f"Ошибка при проверке задачи {task_id} на создание из Telegram: {e}")
         return False
