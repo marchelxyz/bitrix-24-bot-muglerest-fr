@@ -1596,6 +1596,19 @@ async def create_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if result.get("result") and result["result"].get("task"):
             task_id = result["result"]["task"]["id"]
             
+            # Сохраняем информацию о том, что задача создана из Telegram
+            if DATABASE_AVAILABLE:
+                try:
+                    creator_telegram_id = update.effective_user.id if update.effective_user else None
+                    database.mark_task_as_telegram_created(
+                        task_id=task_id,
+                        creator_telegram_id=creator_telegram_id,
+                        creator_bitrix_id=creator_id
+                    )
+                    logger.info(f"✅ Задача {task_id} отмечена как созданная из Telegram")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось сохранить информацию о создании задачи {task_id} из Telegram: {e}")
+            
             # Получаем реальную информацию о задаче из Bitrix для корректного отображения deadline
             task_info = None
             display_deadline = deadline
@@ -2636,6 +2649,20 @@ def main():
                         
                         if result.get("result") and result["result"].get("task"):
                             task_id = result["result"]["task"]["id"]
+                            
+                            # Сохраняем информацию о том, что задача создана из Telegram
+                            if DATABASE_AVAILABLE:
+                                try:
+                                    # Получаем Telegram ID создателя из сессии
+                                    creator_telegram_id = session_data.get('telegram_user_id')
+                                    database.mark_task_as_telegram_created(
+                                        task_id=task_id,
+                                        creator_telegram_id=creator_telegram_id,
+                                        creator_bitrix_id=creator_id
+                                    )
+                                    logger.info(f"✅ Задача {task_id} отмечена как созданная из Telegram (Mini App)")
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Не удалось сохранить информацию о создании задачи {task_id} из Telegram: {e}")
                             
                             # Форматируем deadline для отображения (используем переданное значение, не делаем лишний запрос)
                             display_deadline = None

@@ -226,6 +226,12 @@ class TaskNotificationService:
                     logger.debug(f"   Пропуск задачи {task_id}: отсутствует ID или дедлайн")
                     continue
                 
+                # Проверяем, была ли задача создана из Telegram
+                if DATABASE_AVAILABLE:
+                    if not database.is_task_created_from_telegram(int(task_id)):
+                        logger.debug(f"   Пропуск задачи {task_id}: задача не была создана из Telegram")
+                        continue
+                
                 # Проверяем, не отправляли ли уже уведомление
                 notification_key = self._get_notification_key(task_id, "overdue")
                 if self._was_notification_sent(notification_key):
@@ -349,6 +355,12 @@ class TaskNotificationService:
                 
                 if not task_id or not deadline_str:
                     continue
+                
+                # Проверяем, была ли задача создана из Telegram
+                if DATABASE_AVAILABLE:
+                    if not database.is_task_created_from_telegram(int(task_id)):
+                        logger.debug(f"   Пропуск задачи {task_id}: задача не была создана из Telegram")
+                        continue
                 
                 # Проверяем, не отправляли ли уже уведомление
                 notification_key = self._get_notification_key(task_id, "deadline_warning")
@@ -724,6 +736,12 @@ class TaskNotificationService:
                 logger.debug(f"Пропускаем уведомление о создании задачи {task_id_int} (уже отправляется при создании)")
                 return
             
+            # Проверяем, была ли задача создана из Telegram
+            if DATABASE_AVAILABLE:
+                if not database.is_task_created_from_telegram(task_id_int):
+                    logger.debug(f"Пропуск задачи {task_id_int}: задача не была создана из Telegram")
+                    return
+            
             # Для ONTASKUPDATE получаем полную информацию о задаче через REST API
             task_info = None
             if 'ONTASKUPDATE' in event_upper:
@@ -971,6 +989,12 @@ class TaskNotificationService:
             
             task_id_int = int(task_id)
             event_upper = event.upper()
+            
+            # Проверяем, была ли задача создана из Telegram
+            if DATABASE_AVAILABLE:
+                if not database.is_task_created_from_telegram(task_id_int):
+                    logger.debug(f"Пропуск комментария к задаче {task_id_int}: задача не была создана из Telegram")
+                    return
             
             # Используем основной Bitrix24Client с вебхук токеном из переменных окружения
             # application_token из вебхука не является вебхук токеном для REST API и может не иметь прав
