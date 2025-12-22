@@ -54,20 +54,33 @@ class UnisenderClient:
             # Парсим JSON ответ
             try:
                 result = response.json()
-            except (ValueError, TypeError) as json_error:
+            except (ValueError, TypeError, json.JSONDecodeError) as json_error:
                 error_msg = f"Ошибка парсинга JSON ответа от Unisender API: {json_error}. Ответ сервера: {response.text[:500]}"
                 logger.error(f"Ошибка Unisender API для метода {method}: {error_msg}")
                 raise Exception(f"Unisender API ошибка: {error_msg}")
             
             # Проверяем, что результат является словарем
+            # Если результат - строка, пытаемся распарсить её как JSON
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    error_msg = f"Неожиданный тип ответа от Unisender API: строка '{result[:100]}'. Ожидался словарь."
+                    logger.error(f"Ошибка Unisender API для метода {method}: {error_msg}")
+                    raise Exception(f"Unisender API ошибка: {error_msg}")
+            
             if not isinstance(result, dict):
                 error_msg = f"Неожиданный тип ответа от Unisender API: {type(result).__name__}. Ожидался словарь, получено: {result}"
                 logger.error(f"Ошибка Unisender API для метода {method}: {error_msg}")
                 raise Exception(f"Unisender API ошибка: {error_msg}")
             
             # Проверяем наличие ошибок в ответе
-            if 'error' in result:
+            # Дополнительная проверка типа для безопасности
+            if isinstance(result, dict) and 'error' in result:
                 error_msg = result.get('error', 'Неизвестная ошибка')
+                # Если error_msg - это словарь, извлекаем сообщение
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get('message', str(error_msg))
                 logger.error(f"Ошибка Unisender API для метода {method}: {error_msg}")
                 raise Exception(f"Unisender API ошибка: {error_msg}")
             
