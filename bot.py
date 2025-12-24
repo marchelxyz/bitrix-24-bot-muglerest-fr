@@ -2083,7 +2083,12 @@ def main():
     # ВАЖНО: Обработчик reply-сообщений должен быть зарегистрирован ДО ConversationHandler,
     # чтобы он мог перехватить сообщения раньше
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("create", create_task_command))
+    # Используем MessageHandler для поддержки формата /create@bot_username
+    # Регулярное выражение обрабатывает как /create, так и /create@bot_username
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/create(@\w+)?(\s|$)'),
+        create_task_command
+    ))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("link", link_user))
     application.add_handler(CommandHandler("check_telegram_id", check_telegram_id))
