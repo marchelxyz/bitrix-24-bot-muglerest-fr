@@ -156,22 +156,35 @@ else:
 # Теперь связи хранятся в PostgreSQL, но можем загрузить из Bitrix24 для миграции
 if DATABASE_AVAILABLE:
     try:
-        logger.info("Загрузка связей из Bitrix24 для синхронизации с PostgreSQL...")
+        logger.info("=" * 80)
+        logger.info("🔄 СИНХРОНИЗАЦИЯ СВЯЗЕЙ ИЗ BITRIX24 В POSTGRESQL")
+        logger.info("=" * 80)
         loaded_mappings = bitrix_client.load_all_telegram_mappings()
         if loaded_mappings:
             # Сохраняем в БД вместо памяти
             saved_count = 0
+            failed_count = 0
             for telegram_id, bitrix_id in loaded_mappings.items():
                 if database.set_telegram_to_bitrix_mapping(telegram_id, bitrix_id):
                     saved_count += 1
-                # Также обновляем локальный кеш
-                TELEGRAM_TO_BITRIX_MAPPING[telegram_id] = bitrix_id
-            logger.info(f"✅ Синхронизировано {saved_count} из {len(loaded_mappings)} связей из Bitrix24 в PostgreSQL")
+                    # Также обновляем локальный кеш
+                    TELEGRAM_TO_BITRIX_MAPPING[telegram_id] = bitrix_id
+                else:
+                    failed_count += 1
+                    logger.warning(f"⚠️ Не удалось сохранить связь Telegram {telegram_id} → Bitrix {bitrix_id} в PostgreSQL")
+            
+            logger.info("=" * 80)
+            logger.info("📊 РЕЗУЛЬТАТЫ СОХРАНЕНИЯ В POSTGRESQL:")
+            logger.info(f"  ✅ Успешно сохранено: {saved_count}")
+            if failed_count > 0:
+                logger.warning(f"  ❌ Не удалось сохранить: {failed_count}")
+            logger.info(f"  📋 Всего связей из Bitrix24: {len(loaded_mappings)}")
+            logger.info("=" * 80)
         else:
             logger.info("ℹ️ В Bitrix24 пока нет сохраненных связей. Используйте команду /link для связывания.")
     except Exception as e:
-        logger.error(f"Ошибка при синхронизации связей из Bitrix24: {e}", exc_info=True)
-        logger.warning("Бот будет работать, но связи нужно будет устанавливать заново")
+        logger.error(f"❌ Ошибка при синхронизации связей из Bitrix24: {e}", exc_info=True)
+        logger.warning("⚠️ Бот будет работать, но связи нужно будет устанавливать заново")
 
 # Загружаем и логируем всех пользователей Bitrix24 при старте бота
 try:
