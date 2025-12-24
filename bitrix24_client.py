@@ -780,7 +780,7 @@ class Bitrix24Client:
     
     def get_all_users(self, active_only: bool = True) -> List[Dict]:
         """
-        Получение всех пользователей Битрикс24
+        Получение всех пользователей Битрикс24 с поддержкой пагинации
         
         Args:
             active_only: Если True, возвращает только активных пользователей
@@ -788,99 +788,117 @@ class Bitrix24Client:
         Returns:
             Список всех пользователей
         """
+        valid_users = []
+        start = 0
+        limit = 50  # Bitrix24 по умолчанию возвращает 50 записей, но можно запросить больше
+        max_iterations = 1000  # Защита от бесконечного цикла (максимум 50,000 пользователей)
+        iteration = 0
+        
         try:
-            # В Битрикс24 REST API метод user.get возвращает всех пользователей
-            # Используем фильтр для активных пользователей, если нужно
-            # Запрашиваем все необходимые поля: ID, NAME, LAST_NAME, EMAIL, LOGIN и пользовательское поле с Telegram ID
-            params = {
-                "SELECT": ["ID", "NAME", "LAST_NAME", "EMAIL", "LOGIN", self.telegram_field_name]  # Запрашиваем все необходимые поля
-            }
-            if active_only:
-                params["FILTER"] = {"ACTIVE": "Y"}
-            
-            # Получаем всех пользователей одним запросом
-            # Битрикс24 обычно возвращает всех пользователей сразу
-            result = self._make_request("user.get", params)
-            users = result.get("result", [])
-            
-            # Фильтруем валидных пользователей
-            valid_users = []
-            if isinstance(users, list):
-                for user in users:
-                    # Пропускаем пустые списки и невалидные элементы
-                    if isinstance(user, dict) and user.get("ID"):
-                        # Проверяем, что это не пустой словарь
-                        if user:
-                            valid_users.append(user)
-                    elif isinstance(user, list):
-                        # Пропускаем пустые списки
-                        logger.debug(f"Пропущен пустой список в результате user.get")
-                        continue
-                    else:
-                        logger.debug(f"Пропущен невалидный элемент пользователя: {type(user)}, значение: {user}")
-                        continue
+            # Используем пагинацию для получения всех пользователей
+            # Bitrix24 может ограничивать количество возвращаемых записей за один запрос
+            while iteration < max_iterations:
+                iteration += 1
+                params = {
+                    "SELECT": ["ID", "NAME", "LAST_NAME", "EMAIL", "LOGIN", self.telegram_field_name],
+                    "start": start,
+                    "limit": limit
+                }
+                if active_only:
+                    params["FILTER"] = {"ACTIVE": "Y"}
                 
-                # Логируем всех пользователей с их ID и именами
-                logger.info("=" * 80)
-                logger.info("📋 СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ BITRIX24:")
-                logger.info("=" * 80)
-                for user in valid_users:
-                    user_id = user.get("ID", "N/A")
-                    name = user.get("NAME", "").strip()
-                    last_name = user.get("LAST_NAME", "").strip()
-                    full_name = f"{name} {last_name}".strip()
-                    email = user.get("EMAIL", "").strip()
-                    login = user.get("LOGIN", "").strip()
-                    telegram_id = user.get(self.telegram_field_name, "").strip()
-                    
-                    # Формируем строку для логирования
-                    log_line = f"ID: {user_id}"
-                    if full_name:
-                        log_line += f" | Имя: {full_name}"
-                    if login:
-                        log_line += f" | Login: {login}"
-                    if telegram_id:
-                        log_line += f" | Telegram ID: {telegram_id}"
-                    
-                    logger.info(log_line)
-                logger.info("=" * 80)
-                logger.info(f"Всего пользователей: {len(valid_users)}")
-                logger.info("=" * 80)
+                logger.debug(f"Запрос пользователей: start={start}, limit={limit}")
+                result = self._make_request("user.get", params)
+                users = result.get("result", [])
                 
-                return valid_users
+                # Если нет пользователей, прекращаем пагинацию
+                if not users:
+                    logger.debug(f"Получен пустой список пользователей на странице start={start}, прекращаем пагинацию")
+                    break
+                
+                # Обрабатываем полученных пользователей
+                batch_valid = []
+                if isinstance(users, list):
+                    for user in users:
+                        if isinstance(user, dict) and user.get("ID"):
+                            if user:
+                                batch_valid.append(user)
+                        elif isinstance(user, list):
+                            logger.debug(f"Пропущен пустой список в результате user.get")
+                            continue
+                        else:
+                            logger.debug(f"Пропущен невалидный элемент пользователя: {type(user)}, значение: {user}")
+                            continue
+                    
+                    logger.debug(f"Получено {len(batch_valid)} валидных пользователей на странице start={start}")
+                    valid_users.extend(batch_valid)
+                    
+                    # Если получили меньше записей, чем запрашивали, значит это последняя страница
+                    if len(batch_valid) < limit:
+                        logger.debug(f"Получено меньше записей ({len(batch_valid)}) чем запрошено ({limit}), это последняя страница")
+                        break
+                    
+                    # Переходим к следующей странице
+                    start += limit
+                    logger.debug(f"Переход к следующей странице: start={start}")
+                elif isinstance(users, dict) and users.get("ID"):
+                    # Если получили одного пользователя как словарь
+                    valid_users.append(users)
+                    logger.debug(f"Получен один пользователь как словарь, прекращаем пагинацию")
+                    break
+                else:
+                    # Неожиданный формат ответа
+                    logger.warning(f"Неожиданный формат ответа от user.get: {type(users)}")
+                    break
             
-            # Если результат - словарь с одним пользователем, оборачиваем в список
-            if isinstance(users, dict) and users.get("ID"):
-                # Логируем одного пользователя
-                user = users
+            if iteration >= max_iterations:
+                logger.warning(f"⚠️ Достигнут лимит итераций пагинации ({max_iterations}). Возможно, не все пользователи были загружены.")
+            
+            # Логируем всех пользователей с их ID и именами
+            logger.info("=" * 80)
+            logger.info("📋 СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ BITRIX24:")
+            logger.info("=" * 80)
+            
+            users_with_telegram = 0
+            users_without_telegram = 0
+            
+            for user in valid_users:
                 user_id = user.get("ID", "N/A")
                 name = user.get("NAME", "").strip()
                 last_name = user.get("LAST_NAME", "").strip()
                 full_name = f"{name} {last_name}".strip()
                 email = user.get("EMAIL", "").strip()
                 login = user.get("LOGIN", "").strip()
-                telegram_id = user.get(self.telegram_field_name, "").strip()
+                telegram_id = user.get(self.telegram_field_name, "").strip() if user.get(self.telegram_field_name) else None
                 
+                # Формируем строку для логирования
                 log_line = f"ID: {user_id}"
                 if full_name:
                     log_line += f" | Имя: {full_name}"
                 if login:
                     log_line += f" | Login: {login}"
                 if telegram_id:
-                    log_line += f" | Telegram ID: {telegram_id}"
+                    log_line += f" | Telegram ID: {telegram_id} ✅"
+                    users_with_telegram += 1
+                else:
+                    log_line += f" | Telegram ID: отсутствует ⚠️"
+                    users_without_telegram += 1
                 
-                logger.info("=" * 80)
-                logger.info("📋 ПОЛЬЗОВАТЕЛЬ BITRIX24:")
                 logger.info(log_line)
-                logger.info("=" * 80)
-                
-                return [users]
             
-            return []
+            logger.info("=" * 80)
+            logger.info(f"Всего пользователей: {len(valid_users)}")
+            logger.info(f"  ✅ С Telegram ID: {users_with_telegram}")
+            logger.info(f"  ⚠️ Без Telegram ID: {users_without_telegram}")
+            logger.info("=" * 80)
+            
+            return valid_users
+            
         except Exception as e:
-            logger.error(f"Ошибка при получении всех пользователей: {e}")
-            # Fallback: пробуем без SELECT (вернутся все поля)
+            logger.error(f"Ошибка при получении всех пользователей: {e}", exc_info=True)
+            # Fallback: пробуем без SELECT и пагинации (вернутся все поля)
             try:
+                logger.info("Попытка fallback запроса без пагинации...")
                 params = {}
                 if active_only:
                     params["FILTER"] = {"ACTIVE": "Y"}
@@ -891,7 +909,6 @@ class Bitrix24Client:
                 valid_users = []
                 if isinstance(users, list):
                     for user in users:
-                        # Пропускаем пустые списки и невалидные элементы
                         if isinstance(user, dict) and user.get("ID"):
                             if user:
                                 valid_users.append(user)
@@ -906,6 +923,10 @@ class Bitrix24Client:
                     logger.info("=" * 80)
                     logger.info("📋 СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ BITRIX24 (fallback):")
                     logger.info("=" * 80)
+                    
+                    users_with_telegram = 0
+                    users_without_telegram = 0
+                    
                     for user in valid_users:
                         user_id = user.get("ID", "N/A")
                         name = user.get("NAME", "").strip()
@@ -913,7 +934,7 @@ class Bitrix24Client:
                         full_name = f"{name} {last_name}".strip()
                         email = user.get("EMAIL", "").strip()
                         login = user.get("LOGIN", "").strip()
-                        telegram_id = user.get(self.telegram_field_name, "").strip()
+                        telegram_id = user.get(self.telegram_field_name, "").strip() if user.get(self.telegram_field_name) else None
                         
                         log_line = f"ID: {user_id}"
                         if full_name:
@@ -921,11 +942,18 @@ class Bitrix24Client:
                         if login:
                             log_line += f" | Login: {login}"
                         if telegram_id:
-                            log_line += f" | Telegram ID: {telegram_id}"
+                            log_line += f" | Telegram ID: {telegram_id} ✅"
+                            users_with_telegram += 1
+                        else:
+                            log_line += f" | Telegram ID: отсутствует ⚠️"
+                            users_without_telegram += 1
                         
                         logger.info(log_line)
+                    
                     logger.info("=" * 80)
                     logger.info(f"Всего пользователей: {len(valid_users)}")
+                    logger.info(f"  ✅ С Telegram ID: {users_with_telegram}")
+                    logger.info(f"  ⚠️ Без Telegram ID: {users_without_telegram}")
                     logger.info("=" * 80)
                     
                     return valid_users
@@ -939,7 +967,7 @@ class Bitrix24Client:
                     full_name = f"{name} {last_name}".strip()
                     email = user.get("EMAIL", "").strip()
                     login = user.get("LOGIN", "").strip()
-                    telegram_id = user.get(self.telegram_field_name, "").strip()
+                    telegram_id = user.get(self.telegram_field_name, "").strip() if user.get(self.telegram_field_name) else None
                     
                     log_line = f"ID: {user_id}"
                     if full_name:
@@ -947,7 +975,9 @@ class Bitrix24Client:
                     if login:
                         log_line += f" | Login: {login}"
                     if telegram_id:
-                        log_line += f" | Telegram ID: {telegram_id}"
+                        log_line += f" | Telegram ID: {telegram_id} ✅"
+                    else:
+                        log_line += f" | Telegram ID: отсутствует ⚠️"
                     
                     logger.info("=" * 80)
                     logger.info("📋 ПОЛЬЗОВАТЕЛЬ BITRIX24 (fallback):")
@@ -958,7 +988,7 @@ class Bitrix24Client:
                 
                 return []
             except Exception as fallback_error:
-                logger.error(f"Ошибка при fallback запросе пользователей: {fallback_error}")
+                logger.error(f"Ошибка при fallback запросе пользователей: {fallback_error}", exc_info=True)
                 return []
     
     def get_user_id_by_telegram_username(self, telegram_username: str) -> Optional[int]:
@@ -1626,12 +1656,17 @@ class Bitrix24Client:
     def load_all_telegram_mappings(self) -> Dict[int, int]:
         """
         Загрузка всех связей Telegram ID -> Bitrix24 User ID из Bitrix24
+        с детальным логированием всех попыток подключения
         
         Returns:
             Словарь {telegram_id: bitrix_user_id}
         """
         mappings = {}
         try:
+            logger.info("=" * 80)
+            logger.info("🔄 НАЧАЛО СИНХРОНИЗАЦИИ СВЯЗЕЙ TELEGRAM ID -> BITRIX24")
+            logger.info("=" * 80)
+            
             # Получаем всех пользователей
             users = self.get_all_users(active_only=True)
             
@@ -1640,31 +1675,60 @@ class Bitrix24Client:
                 logger.warning(f"get_all_users вернул не список: {type(users)}")
                 return mappings
             
+            logger.info(f"📊 Обработка {len(users)} пользователей для синхронизации связей...")
+            
             loaded_count = 0
+            skipped_count = 0
+            error_count = 0
+            
             for user in users:
                 # Проверяем, что user - это словарь
                 if not isinstance(user, dict):
                     logger.debug(f"Пропущен элемент пользователя (не словарь): {type(user)}")
+                    skipped_count += 1
                     continue
                 
                 user_id = user.get("ID")
+                name = user.get("NAME", "").strip()
+                last_name = user.get("LAST_NAME", "").strip()
+                full_name = f"{name} {last_name}".strip() if name or last_name else "Без имени"
                 telegram_id_str = user.get(self.telegram_field_name)
                 
-                if user_id and telegram_id_str:
+                if not user_id:
+                    logger.debug(f"Пропущен пользователь без ID: {user}")
+                    skipped_count += 1
+                    continue
+                
+                if telegram_id_str:
                     try:
                         telegram_id = int(telegram_id_str)
                         mappings[telegram_id] = int(user_id)
                         loaded_count += 1
-                    except (ValueError, TypeError):
+                        logger.info(f"✅ Связь найдена: Telegram ID {telegram_id} → Bitrix ID {user_id} ({full_name})")
+                    except (ValueError, TypeError) as e:
+                        error_count += 1
+                        logger.warning(f"⚠️ Ошибка преобразования Telegram ID для пользователя {user_id} ({full_name}): {telegram_id_str} - {e}")
                         continue
+                else:
+                    skipped_count += 1
+                    logger.debug(f"⚠️ Пользователь {user_id} ({full_name}) не имеет Telegram ID в поле '{self.telegram_field_name}'")
+            
+            logger.info("=" * 80)
+            logger.info("📊 РЕЗУЛЬТАТЫ СИНХРОНИЗАЦИИ СВЯЗЕЙ:")
+            logger.info(f"  ✅ Успешно загружено связей: {loaded_count}")
+            logger.info(f"  ⚠️ Пропущено пользователей без Telegram ID: {skipped_count}")
+            logger.info(f"  ❌ Ошибок при обработке: {error_count}")
+            logger.info(f"  📋 Всего обработано пользователей: {len(users)}")
+            logger.info("=" * 80)
             
             if loaded_count > 0:
                 logger.info(f"✅ Загружено {loaded_count} связей Telegram ID -> Bitrix24 из Bitrix24")
             else:
-                logger.info("ℹ️ В Bitrix24 не найдено сохраненных связей Telegram ID")
+                logger.warning("⚠️ В Bitrix24 не найдено сохраненных связей Telegram ID")
+                logger.info("💡 Используйте команду /link для связывания Telegram аккаунтов с пользователями Bitrix24")
                 
         except Exception as e:
-            logger.error(f"Ошибка при загрузке связей из Bitrix24: {e}", exc_info=True)
+            logger.error(f"❌ Ошибка при загрузке связей из Bitrix24: {e}", exc_info=True)
         
         return mappings
     
