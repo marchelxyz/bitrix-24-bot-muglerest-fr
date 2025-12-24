@@ -1667,9 +1667,16 @@ async def create_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена создания задачи"""
-    context.user_data.clear()
-    await update.message.reply_text("❌ Создание задачи отменено.")
-    return ConversationHandler.END
+    # Проверяем, есть ли активный диалог создания задачи
+    # ConversationHandler использует ключи в user_data для отслеживания состояния
+    if context.user_data and len(context.user_data) > 0:
+        context.user_data.clear()
+        await update.message.reply_text("❌ Создание задачи отменено.")
+        return ConversationHandler.END
+    else:
+        # Если диалога нет, просто сообщаем об этом
+        await update.message.reply_text("ℹ️ Нет активного процесса создания задачи для отмены.")
+        return ConversationHandler.END
 
 
 async def handle_reply_with_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2076,22 +2083,63 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            MessageHandler(
+                filters.TEXT & filters.Regex(r'^/cancel(@\w+)?(\s|$)'),
+                cancel
+            )
+        ],
     )
     
     # Регистрируем обработчики
     # ВАЖНО: Обработчик reply-сообщений должен быть зарегистрирован ДО ConversationHandler,
     # чтобы он мог перехватить сообщения раньше
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("create", create_task_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("link", link_user))
-    application.add_handler(CommandHandler("check_telegram_id", check_telegram_id))
-    application.add_handler(CommandHandler("link_username", link_username))
-    application.add_handler(CommandHandler("departments", departments_command))
-    application.add_handler(CommandHandler("group_info", group_info_command))
-    application.add_handler(CommandHandler("webhooks", webhooks_command))
-    application.add_handler(CommandHandler("webhook", webhook_detail_command))
+    # Используем MessageHandler для всех команд для поддержки формата /command@bot_username
+    # Регулярные выражения обрабатывают как /command, так и /command@bot_username
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/start(@\w+)?(\s|$)'),
+        start
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/create(@\w+)?(\s|$)'),
+        create_task_command
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/help(@\w+)?(\s|$)'),
+        help_command
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/link(@\w+)?(\s|$)'),
+        link_user
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/check_telegram_id(@\w+)?(\s|$)'),
+        check_telegram_id
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/link_username(@\w+)?(\s|$)'),
+        link_username
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/departments(@\w+)?(\s|$)'),
+        departments_command
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/group_info(@\w+)?(\s|$)'),
+        group_info_command
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/webhooks(@\w+)?(\s|$)'),
+        webhooks_command
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/webhook(@\w+)?(\s|$)'),
+        webhook_detail_command
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^/cancel(@\w+)?(\s|$)'),
+        cancel
+    ))
     
     # Обработчик для reply-сообщений с упоминанием бота
     # Регистрируем ПЕРЕД ConversationHandler, чтобы он имел приоритет
