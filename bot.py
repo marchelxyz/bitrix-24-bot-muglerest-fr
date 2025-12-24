@@ -1211,44 +1211,52 @@ async def link_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Поддерживаем форматы: /link 123, /link123, /link@bot 123, /link@bot123
     text = message.text or ""
     logger.info(f"🔍 Обработка команды /link. Текст сообщения: '{text}'")
+    logger.info(f"🔍 context.args: {context.args}")
     
-    # Пробуем извлечь ID из текста после /link
+    # Извлекаем ID из текста сообщения
     # Поддерживаем форматы: /link 123, /link123, /link@bot 123, /link@bot123
-    match = re.search(r'^/link(@\w+)?\s*(\d+)', text)
-    if match:
-        bitrix_id_str = match.group(2)
-        logger.info(f"🔍 Извлечен Bitrix ID через regex: '{bitrix_id_str}'")
-    elif context.args and len(context.args) >= 1:
-        # Если есть аргументы в context.args (для CommandHandler), используем их
-        bitrix_id_str = context.args[0]
+    bitrix_id_str = None
+    
+    # Сначала пробуем использовать context.args (если доступен)
+    if context.args and len(context.args) >= 1:
+        bitrix_id_str = context.args[0].strip()
         logger.info(f"🔍 Использован context.args[0]: '{bitrix_id_str}'")
-    else:
-        # Пробуем разбить текст по пробелам
-        parts = text.split(None, 1)
+    
+    # Если не получилось через context.args, извлекаем из текста
+    if not bitrix_id_str:
+        # Удаляем имя бота если есть (например, /link@bot_username)
+        text_clean = re.sub(r'^/link(@\w+)?', '/link', text)
+        logger.info(f"🔍 Очищенный текст: '{text_clean}'")
+        
+        # Сначала пробуем разбить текст по пробелам (самый простой случай: /link 123)
+        parts = text_clean.split(None, 1)
+        logger.info(f"🔍 Части текста после split: {parts}")
+        
         if len(parts) >= 2:
-            # Удаляем имя бота если есть
-            second_part = re.sub(r'^@\w+\s*', '', parts[1])
-            if second_part.isdigit():
-                bitrix_id_str = second_part
-                logger.info(f"🔍 Извлечен из parts[1]: '{bitrix_id_str}'")
-            else:
-                logger.warning(f"⚠️ Не удалось извлечь Bitrix ID из текста: '{text}'")
-                await message.reply_text(
-                    "Использование: /link bitrix_user_id\n\n"
-                    "Пример: /link 123\n\n"
-                    "Эта команда свяжет ваш Telegram аккаунт с пользователем Битрикс24.\n"
-                    "Связь будет сохранена в базе данных бота."
-                )
-                return
+            # Есть аргумент после пробела
+            second_part = parts[1].strip()
+            # Извлекаем первую последовательность цифр
+            match = re.search(r'(\d+)', second_part)
+            if match:
+                bitrix_id_str = match.group(1)
+                logger.info(f"🔍 Извлечен из parts[1] через regex: '{bitrix_id_str}'")
         else:
-            logger.warning(f"⚠️ Не удалось извлечь Bitrix ID из текста: '{text}'")
-            await message.reply_text(
-                "Использование: /link bitrix_user_id\n\n"
-                "Пример: /link 123\n\n"
-                "Эта команда свяжет ваш Telegram аккаунт с пользователем Битрикс24.\n"
-                "Связь будет сохранена в базе данных бота."
-            )
-            return
+            # Нет пробела, пробуем извлечь ID напрямую из текста (случай /link123)
+            match = re.search(r'/link\s*(\d+)', text_clean)
+            if match:
+                bitrix_id_str = match.group(1)
+                logger.info(f"🔍 Извлечен Bitrix ID через regex (без пробела): '{bitrix_id_str}'")
+    
+    # Проверяем, удалось ли извлечь ID
+    if not bitrix_id_str:
+        logger.warning(f"⚠️ Не удалось извлечь Bitrix ID из текста: '{text}'")
+        await message.reply_text(
+            "Использование: /link bitrix_user_id\n\n"
+            "Пример: /link 123\n\n"
+            "Эта команда свяжет ваш Telegram аккаунт с пользователем Битрикс24.\n"
+            "Связь будет сохранена в базе данных бота."
+        )
+        return
     
     telegram_user_id = update.effective_user.id
     logger.info(f"🔍 Telegram User ID: {telegram_user_id}, Bitrix ID строка: '{bitrix_id_str}'")
@@ -2237,8 +2245,9 @@ def main():
         filters.TEXT & filters.Regex(r'^/help(@\w+)?(\s|$)'),
         help_command
     ))
+    # Обработчик команды /link - проверяем только начало команды
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r'^/link(@\w+)?(\s+\d+|\d+|$)'),
+        filters.TEXT & filters.Regex(r'^/link'),
         link_user
     ))
     application.add_handler(MessageHandler(
